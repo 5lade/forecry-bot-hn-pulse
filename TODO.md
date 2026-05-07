@@ -487,7 +487,7 @@ acceptance: |
   - Plot is reachable and decodes as PNG
 ```
 
-- [ ] hn-pulse-p3-002-api-key
+- [x] hn-pulse-p3-002-api-key
 
 ```task
 id: hn-pulse-p3-002-api-key
