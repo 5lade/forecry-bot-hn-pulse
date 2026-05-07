@@ -110,7 +110,7 @@ acceptance: |
   - Vitest covers happy path + each missing-key path
 ```
 
-- [ ] hn-pulse-p0-005-healthcheck
+- [x] hn-pulse-p0-005-healthcheck
 
 ```task
 id: hn-pulse-p0-005-healthcheck
