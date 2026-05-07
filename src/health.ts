@@ -12,11 +12,14 @@ export interface HealthCheckResult {
 
 export interface HealthReport {
   ok: boolean;
+  lastBatchAt: string | null;
   checks: {
     db: HealthCheckResult;
     poller: HealthCheckResult;
   };
 }
+
+export type LastBatchAtGetter = () => Date | null;
 
 export const POLLER_LIVENESS_WINDOW_MS = 5 * 60 * 1000;
 
@@ -66,10 +69,16 @@ export async function checkPollerLiveness(
 export async function runHealthChecks(
   client: HealthQueryClient,
   now: () => Date = () => new Date(),
+  getLastBatchAt: LastBatchAtGetter = () => null,
 ): Promise<HealthReport> {
   const db = await checkDb(client);
   const poller: HealthCheckResult = db.ok
     ? await checkPollerLiveness(client, now)
     : { ok: false, detail: "skipped: db unreachable" };
-  return { ok: db.ok && poller.ok, checks: { db, poller } };
+  const lastBatch = getLastBatchAt();
+  return {
+    ok: db.ok && poller.ok,
+    lastBatchAt: lastBatch ? lastBatch.toISOString() : null,
+    checks: { db, poller },
+  };
 }

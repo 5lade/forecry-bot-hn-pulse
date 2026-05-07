@@ -1,11 +1,17 @@
 import express, { type Express } from "express";
 import type { Server } from "node:http";
 import { getPool } from "./db/client.js";
-import { runHealthChecks, type HealthQueryClient } from "./health.js";
+import {
+  runHealthChecks,
+  type HealthQueryClient,
+  type LastBatchAtGetter,
+} from "./health.js";
+import { getLastBatchAt as defaultLastBatchAt } from "./poller/index.js";
 
 export interface CreateAppOptions {
   client?: HealthQueryClient;
   now?: () => Date;
+  getLastBatchAt?: LastBatchAtGetter;
 }
 
 export function createApp(opts: CreateAppOptions = {}): Express {
@@ -24,9 +30,10 @@ export function createApp(opts: CreateAppOptions = {}): Express {
       },
     };
   const now = opts.now ?? (() => new Date());
+  const getLastBatchAt = opts.getLastBatchAt ?? defaultLastBatchAt;
 
   app.get("/health", async (_req, res) => {
-    const report = await runHealthChecks(client, now);
+    const report = await runHealthChecks(client, now, getLastBatchAt);
     res.status(report.ok ? 200 : 503).json(report);
   });
 
