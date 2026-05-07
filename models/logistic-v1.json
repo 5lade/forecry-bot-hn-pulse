@@ -1,0 +1,47 @@
+{
+  "version": "logistic-v1",
+  "trained_at": "2026-05-07T14:20:09.605Z",
+  "feature_names": [
+    "bias",
+    "log1p_upvotes",
+    "log1p_comments",
+    "log_age_hours_p2",
+    "log1p_score_velocity",
+    "log1p_comment_velocity",
+    "domain_reputation",
+    "title_length_norm",
+    "has_show_hn",
+    "has_ask_hn",
+    "karma_newbie",
+    "karma_low",
+    "karma_mid",
+    "karma_high"
+  ],
+  "weights": {
+    "bias": -1.8777859078751153,
+    "log1p_upvotes": 1.0876128109046113,
+    "log1p_comments": 0.4625938791227865,
+    "log_age_hours_p2": -1.2661040613468686,
+    "log1p_score_velocity": 0.8710494055927346,
+    "log1p_comment_velocity": 0.2409725533409147,
+    "domain_reputation": 0.32666550192016597,
+    "title_length_norm": -0.25082021886640404,
+    "has_show_hn": 0.006902920880547641,
+    "has_ask_hn": -0.026016208018006536,
+    "karma_newbie": -0.4380105761857083,
+    "karma_low": -0.23678416692529544,
+    "karma_mid": 0.029170159627619752,
+    "karma_high": 0.07027404581921338
+  },
+  "metrics": {
+    "n_train": 2018,
+    "n_holdout": 1982,
+    "auc_holdout": 0.8951177840511826,
+    "loss_train": 0.4311052580734864,
+    "loss_holdout": 0.4050424423365051,
+    "seed": 42,
+    "l2": 0.01,
+    "iterations": 500,
+    "days_span": 14
+  }
+}

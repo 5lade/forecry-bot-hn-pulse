@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   getMostRecentSnapshotBefore,
   getSnapshotAtOrBefore,
@@ -16,6 +17,13 @@ import {
   type FeatureRow,
   type FeatureSnapshotInput,
 } from "./features.js";
+import {
+  DEFAULT_MODEL_PATH,
+  FEATURE_NAMES,
+  MODEL_VERSION,
+  predictProbability,
+  type TrainedLogisticModel,
+} from "./train.js";
 
 export {
   DEFAULT_BASELINE_WEIGHTS,
@@ -25,10 +33,86 @@ export {
 
 export const FIVE_MIN_MS = 5 * 60_000;
 
+export type ScoringFn = (features: FeatureRow) => number;
+
+export function makeBaselineScorer(
+  weights: BaselineWeights = DEFAULT_BASELINE_WEIGHTS,
+): ScoringFn {
+  return (features) => scoreFeaturesBaseline(features, weights);
+}
+
+export function makeTrainedScorer(model: TrainedLogisticModel): ScoringFn {
+  const weights = model.weights;
+  return (features) => predictProbability(weights, features);
+}
+
+export function loadTrainedModel(
+  path: string = DEFAULT_MODEL_PATH,
+): TrainedLogisticModel | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.version !== MODEL_VERSION) return null;
+  const weights = obj.weights;
+  if (!weights || typeof weights !== "object") return null;
+  const w = weights as Record<string, unknown>;
+  for (const name of FEATURE_NAMES) {
+    const v = w[name];
+    if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  }
+  return parsed as TrainedLogisticModel;
+}
+
+let cachedDefaultScorer: ScoringFn | null = null;
+let cachedDefaultSource: "trained" | "baseline" | null = null;
+
+export interface DefaultScorerInfo {
+  scorer: ScoringFn;
+  source: "trained" | "baseline";
+}
+
+export function getDefaultScorer(): DefaultScorerInfo {
+  if (cachedDefaultScorer == null || cachedDefaultSource == null) {
+    const model = loadTrainedModel();
+    if (model) {
+      cachedDefaultScorer = makeTrainedScorer(model);
+      cachedDefaultSource = "trained";
+    } else {
+      cachedDefaultScorer = makeBaselineScorer();
+      cachedDefaultSource = "baseline";
+    }
+  }
+  return { scorer: cachedDefaultScorer, source: cachedDefaultSource };
+}
+
+export function resetDefaultScorerForTesting(): void {
+  cachedDefaultScorer = null;
+  cachedDefaultSource = null;
+}
+
 export interface ScoreSnapshotArgs {
   features: FeatureRow;
   previousProbabilityFiveMinAgo: number | null;
+  /**
+   * If provided, score with the supplied baseline weights instead of the
+   * default scorer (trained model when available, baseline otherwise).
+   * Tests pass this to assert baseline behavior; the runtime path leaves it
+   * undefined so the trained model takes effect.
+   */
   weights?: BaselineWeights;
+  /** Inject a custom scoring function (overrides weights). */
+  scorer?: ScoringFn;
 }
 
 export interface ScoreSnapshotResult {
@@ -37,7 +121,17 @@ export interface ScoreSnapshotResult {
 }
 
 export function scoreSnapshot(args: ScoreSnapshotArgs): ScoreSnapshotResult {
-  const p = scoreFeaturesBaseline(args.features, args.weights);
+  let p: number;
+  if (args.scorer) {
+    p = args.scorer(args.features);
+  } else if (args.weights) {
+    p = scoreFeaturesBaseline(args.features, args.weights);
+  } else {
+    p = getDefaultScorer().scorer(args.features);
+  }
+  if (!Number.isFinite(p)) p = 0;
+  if (p < 0) p = 0;
+  if (p > 1) p = 1;
   const prev = args.previousProbabilityFiveMinAgo;
   const delta = prev == null || !Number.isFinite(prev) ? 0 : p - prev;
   return { p_front_page_6h: p, delta_p_5min: delta };
@@ -65,7 +159,7 @@ export interface ScoreAndInsertResult extends ScoreSnapshotResult {
 export async function scoreAndInsertSnapshot(
   client: ItemsQueryClient,
   input: ScoreAndInsertInput,
-  weights: BaselineWeights = DEFAULT_BASELINE_WEIGHTS,
+  weights?: BaselineWeights,
 ): Promise<ScoreAndInsertResult> {
   const previous: SnapshotLookupRow | null =
     await getMostRecentSnapshotBefore(client, input.item_id, input.taken_at);
