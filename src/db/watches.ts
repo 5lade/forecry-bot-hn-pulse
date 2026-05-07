@@ -1,7 +1,7 @@
 import type { ItemsQueryClient } from "./items.js";
 
 export type WatchType = "item" | "domain" | "submitter";
-export type UserTier = "free" | "pulse" | "pulse-pro";
+export type UserTier = "free" | "pulse" | "pulse-pro" | "canceled";
 
 export interface WatchWithUser {
   id: string;

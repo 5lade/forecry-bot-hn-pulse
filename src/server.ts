@@ -1,5 +1,9 @@
 import express, { type Express } from "express";
 import type { Server } from "node:http";
+import {
+  makeStripeWebhookRoute,
+  type WebhookHandlerDeps,
+} from "./billing/webhook.js";
 import { getPool } from "./db/client.js";
 import {
   runHealthChecks,
@@ -12,6 +16,8 @@ export interface CreateAppOptions {
   client?: HealthQueryClient;
   now?: () => Date;
   getLastBatchAt?: LastBatchAtGetter;
+  /** When provided, mounts POST /stripe/webhook with raw-body parsing. */
+  stripeWebhook?: WebhookHandlerDeps;
 }
 
 export function createApp(opts: CreateAppOptions = {}): Express {
@@ -32,6 +38,16 @@ export function createApp(opts: CreateAppOptions = {}): Express {
   const now = opts.now ?? (() => new Date());
   const getLastBatchAt = opts.getLastBatchAt ?? defaultLastBatchAt;
 
+  // Stripe needs the exact raw body for signature verification; mount
+  // express.raw on this route only and *before* any global JSON parser.
+  if (opts.stripeWebhook) {
+    app.post(
+      "/stripe/webhook",
+      express.raw({ type: "application/json" }),
+      makeStripeWebhookRoute(opts.stripeWebhook),
+    );
+  }
+
   app.get("/health", async (_req, res) => {
     const report = await runHealthChecks(client, now, getLastBatchAt);
     res.status(report.ok ? 200 : 503).json(report);
@@ -51,3 +67,5 @@ export function startServer(opts: StartServerOptions = {}): Server {
     process.stdout.write(`[server] listening on :${port}\n`);
   });
 }
+
+export { makeStripeWebhookRoute } from "./billing/webhook.js";
