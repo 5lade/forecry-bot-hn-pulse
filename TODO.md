@@ -186,7 +186,7 @@ acceptance: |
   - has_show_hn/has_ask_hn are case-insensitive on title prefix
 ```
 
-- [ ] hn-pulse-p1-003-scorer-baseline
+- [x] hn-pulse-p1-003-scorer-baseline
 
 ```task
 id: hn-pulse-p1-003-scorer-baseline
