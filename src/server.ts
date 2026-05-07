@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import type { Server } from "node:http";
+import { createApiRouter, type ApiRoutesOptions } from "./api/routes.js";
 import {
   makeStripeWebhookRoute,
   type WebhookHandlerDeps,
@@ -33,6 +34,10 @@ export interface CreateAppOptions {
   stripeWebhook?: WebhookHandlerDeps;
   /** When provided, mounts GET /plots/:key.png to serve cached plots. */
   plotStore?: PlotStore;
+  /** When provided, mounts the pulse-pro /v1/* REST API. */
+  api?: Omit<ApiRoutesOptions, "client"> & {
+    client?: ApiRoutesOptions["client"];
+  };
 }
 
 const notConfigured =
@@ -108,6 +113,16 @@ export function createApp(opts: CreateAppOptions = {}): Express {
     res.set("Content-Type", contentType);
     res.send(body);
   });
+
+  if (opts.api) {
+    const apiClient: ApiRoutesOptions["client"] = opts.api.client ?? client;
+    app.use(
+      createApiRouter({
+        ...opts.api,
+        client: apiClient,
+      }),
+    );
+  }
 
   if (opts.plotStore) {
     const plotStore = opts.plotStore;
