@@ -76,6 +76,15 @@ export async function listWatchesBySubmitter(
   return res.rows.map(normalizeRow);
 }
 
+export async function countActiveWatches(
+  client: ItemsQueryClient,
+): Promise<number> {
+  const res = await client.query<{ count: number | string }>(
+    `SELECT COUNT(*)::int AS count FROM watches`,
+  );
+  return Number(res.rows[0]?.count ?? 0);
+}
+
 export async function listMatchingWatches(
   client: ItemsQueryClient,
   args: {

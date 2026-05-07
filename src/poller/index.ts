@@ -4,6 +4,7 @@ import {
   type ItemsQueryClient,
 } from "../db/items.js";
 import { childLogger } from "../log.js";
+import { hnItemsSeenTotal, recordBatchAt } from "../metrics.js";
 import {
   scoreAndInsertSnapshot,
   type SnapshotInsertedHook,
@@ -34,6 +35,7 @@ export function _resetLastBatchAtForTest(): void {
 
 function setLastBatch(now: Date): void {
   _lastBatchAt = now;
+  recordBatchAt(now);
 }
 
 function isLiveStory(item: HnItem | null): boolean {
@@ -84,6 +86,7 @@ export async function pollNewStoriesStep(
   for (const id of newIds) {
     const item = await fetchItem(id, deps.hn);
     deps.seen.add(id);
+    hnItemsSeenTotal.inc();
     if (!isLiveStory(item)) {
       skipped += 1;
       continue;
@@ -147,6 +150,7 @@ export async function rescanStep(
   let snapshots = 0;
   for (const row of slice) {
     const item = await fetchItem(row.id, deps.hn);
+    hnItemsSeenTotal.inc();
     if (!item) continue;
     await scoreAndInsertSnapshot(
       deps.client,

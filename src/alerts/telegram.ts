@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ItemsQueryClient } from "../db/items.js";
+import { telegramSendFailuresTotal } from "../metrics.js";
 import { TokenBucketRateLimiter } from "../util/rate-limit.js";
 import {
   retry,
@@ -130,6 +131,7 @@ export class TelegramAlertSender implements AlertSender {
         await sendWithRetry();
       }
     } catch (err) {
+      telegramSendFailuresTotal.inc();
       await this.persistDeadletter(envelope, formatErrorMessage(err), attempts);
       if (this.deps.onError) this.deps.onError(err, "telegram-send");
       throw err;

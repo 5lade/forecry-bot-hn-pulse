@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ItemsQueryClient } from "../db/items.js";
 import { listMatchingWatches } from "../db/watches.js";
 import { childLogger } from "../log.js";
+import { alertsSentTotal } from "../metrics.js";
 import {
   matchAlerts,
   type MatchedAlert,
@@ -144,6 +145,7 @@ export async function dispatchAlertsForSnapshot(
       });
       const deliveredAt = now();
       await markDelivered(deps.client, alertId, deliveredAt);
+      alertsSentTotal.inc({ type: alert.alert_type });
       result.delivered.push(alert);
     } catch (err) {
       result.failedDeliveries.push({ alert, error: err });

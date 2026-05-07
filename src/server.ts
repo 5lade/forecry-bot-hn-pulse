@@ -11,6 +11,7 @@ import {
   type LastBatchAtGetter,
 } from "./health.js";
 import { childLogger } from "./log.js";
+import { renderMetrics } from "./metrics.js";
 import { getLastBatchAt as defaultLastBatchAt } from "./poller/index.js";
 
 export interface CreateAppOptions {
@@ -52,6 +53,12 @@ export function createApp(opts: CreateAppOptions = {}): Express {
   app.get("/health", async (_req, res) => {
     const report = await runHealthChecks(client, now, getLastBatchAt);
     res.status(report.ok ? 200 : 503).json(report);
+  });
+
+  app.get("/metrics", async (_req, res) => {
+    const { contentType, body } = await renderMetrics();
+    res.set("Content-Type", contentType);
+    res.send(body);
   });
 
   return app;

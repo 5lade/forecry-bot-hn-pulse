@@ -6,8 +6,10 @@ import { StubBillingClient, type BillingClient } from "./bot/stripe.js";
 import { loadConfig, redactConfig } from "./config.js";
 import { startCron } from "./cron.js";
 import { getPool } from "./db/client.js";
+import { countActiveWatches } from "./db/watches.js";
 import type { DigestTelegramSender } from "./jobs/daily-digest.js";
 import { logger, loggerErrorSink, loggerInfoSink, loggerWarnSink } from "./log.js";
+import { setActiveWatchesProvider } from "./metrics.js";
 import { startPoller } from "./poller/index.js";
 import { startServer } from "./server.js";
 
@@ -29,6 +31,8 @@ async function main(): Promise<void> {
       return { rows: r.rows as T[] };
     },
   };
+
+  setActiveWatchesProvider(() => countActiveWatches(dbClient));
 
   startServer({
     stripeWebhook: {
