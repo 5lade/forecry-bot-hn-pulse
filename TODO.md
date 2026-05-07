@@ -401,7 +401,7 @@ acceptance: |
   - Deadletter row is created on terminal failure
 ```
 
-- [ ] hn-pulse-p2-003-rate-limit
+- [x] hn-pulse-p2-003-rate-limit
 
 ```task
 id: hn-pulse-p2-003-rate-limit
