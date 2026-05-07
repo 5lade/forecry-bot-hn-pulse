@@ -1,3 +1,5 @@
+import { HttpError, retry, type RetryOptions } from "../util/retry.js";
+
 export const HN_BASE_URL = "https://hacker-news.firebaseio.com/v0";
 
 export interface HnItem {
@@ -21,55 +23,11 @@ export interface FetchResponseLike {
 
 export type FetchLike = (url: string) => Promise<FetchResponseLike>;
 
-export class HttpError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "HttpError";
-  }
-}
-
-export interface BackoffOptions {
-  maxAttempts?: number;
-  baseMs?: number;
-  maxMs?: number;
-  jitter?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-  isRetryable?: (err: unknown) => boolean;
-}
-
-const defaultIsRetryable = (err: unknown): boolean =>
-  err instanceof HttpError && err.status >= 500 && err.status < 600;
-
-export async function withBackoff<T>(
-  fn: () => Promise<T>,
-  opts: BackoffOptions = {},
-): Promise<T> {
-  const maxAttempts = opts.maxAttempts ?? 5;
-  const baseMs = opts.baseMs ?? 250;
-  const maxMs = opts.maxMs ?? 8000;
-  const jitter = opts.jitter ?? Math.random;
-  const sleep =
-    opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
-  const isRetryable = opts.isRetryable ?? defaultIsRetryable;
-
-  let attempt = 0;
-  for (;;) {
-    try {
-      return await fn();
-    } catch (err) {
-      attempt += 1;
-      if (attempt >= maxAttempts || !isRetryable(err)) {
-        throw err;
-      }
-      const expo = Math.min(maxMs, baseMs * 2 ** (attempt - 1));
-      const jittered = expo * (0.5 + jitter() * 0.5);
-      await sleep(jittered);
-    }
-  }
-}
+// Re-export centralized retry primitives so existing callers/tests of hn.ts
+// keep working. New code should import directly from "../util/retry.js".
+export { HttpError };
+export type BackoffOptions = RetryOptions;
+export const withBackoff = retry;
 
 export interface HnClientOptions {
   fetchImpl?: FetchLike;
@@ -91,7 +49,7 @@ export async function fetchNewStoryIds(
 ): Promise<number[]> {
   const fetchImpl = opts.fetchImpl ?? defaultFetch;
   const baseUrl = opts.baseUrl ?? HN_BASE_URL;
-  return withBackoff(async () => {
+  return retry(async () => {
     const res = await fetchImpl(`${baseUrl}/newstories.json`);
     if (!res.ok) {
       throw new HttpError(res.status, `newstories.json HTTP ${res.status}`);
@@ -110,7 +68,7 @@ export async function fetchItem(
 ): Promise<HnItem | null> {
   const fetchImpl = opts.fetchImpl ?? defaultFetch;
   const baseUrl = opts.baseUrl ?? HN_BASE_URL;
-  return withBackoff(async () => {
+  return retry(async () => {
     const res = await fetchImpl(`${baseUrl}/item/${id}.json`);
     if (!res.ok) {
       throw new HttpError(res.status, `item/${id}.json HTTP ${res.status}`);
