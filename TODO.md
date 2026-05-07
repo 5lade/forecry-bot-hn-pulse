@@ -212,7 +212,7 @@ acceptance: |
     same item, or 0 if not available
 ```
 
-- [ ] hn-pulse-p1-004-scorer-train
+- [x] hn-pulse-p1-004-scorer-train
 
 ```task
 id: hn-pulse-p1-004-scorer-train
