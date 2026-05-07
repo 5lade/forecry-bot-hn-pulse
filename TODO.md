@@ -286,7 +286,7 @@ acceptance: |
   - /start is idempotent
 ```
 
-- [ ] hn-pulse-p1-007-stripe-webhook
+- [x] hn-pulse-p1-007-stripe-webhook
 
 ```task
 id: hn-pulse-p1-007-stripe-webhook
