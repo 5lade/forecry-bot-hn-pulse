@@ -6,7 +6,7 @@ Tickets in rule8 fence format. Bert's builder picks the highest-priority `[ ]` t
 
 ## P0 — Blockers
 
-- [ ] hn-pulse-p0-001-node-init
+- [x] hn-pulse-p0-001-node-init
 
 ```task
 id: hn-pulse-p0-001-node-init
