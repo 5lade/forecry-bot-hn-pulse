@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ItemsQueryClient } from "../db/items.js";
+import { TokenBucketRateLimiter } from "../util/rate-limit.js";
 import {
   retry,
   RetryAfterError,
@@ -67,6 +68,12 @@ export interface TelegramSenderDeps {
   resolveChatId(userId: string): Promise<number | string | null>;
   formatMessage(env: AlertEnvelope): string;
   retryOptions?: RetryOptions;
+  /**
+   * Optional outbound rate limiter — caps Telegram traffic at 25/sec global
+   * and 1/sec per chat per Telegram's documented limits, queueing overflow
+   * while preserving per-chat ordering. Omit in unit tests that don't need it.
+   */
+  rateLimiter?: TokenBucketRateLimiter;
   generateId?: () => string;
   now?: () => Date;
   log?: (msg: string) => void;
@@ -85,7 +92,7 @@ export class TelegramAlertSender implements AlertSender {
     const text = this.deps.formatMessage(envelope);
 
     let attempts = 0;
-    try {
+    const sendWithRetry = async (): Promise<void> => {
       await retry(
         async () => {
           attempts += 1;
@@ -112,6 +119,16 @@ export class TelegramAlertSender implements AlertSender {
             this.deps.retryOptions?.isRetryable ?? isTelegramRetryable,
         },
       );
+    };
+
+    try {
+      // Gate the whole send (including retries) through the rate limiter so
+      // FIFO order per chat is preserved even when a 429 retry is in flight.
+      if (this.deps.rateLimiter) {
+        await this.deps.rateLimiter.submit(String(chatId), sendWithRetry);
+      } else {
+        await sendWithRetry();
+      }
     } catch (err) {
       await this.persistDeadletter(envelope, formatErrorMessage(err), attempts);
       if (this.deps.onError) this.deps.onError(err, "telegram-send");

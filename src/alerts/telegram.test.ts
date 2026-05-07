@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ItemsQueryClient } from "../db/items.js";
+import { TokenBucketRateLimiter } from "../util/rate-limit.js";
 import { RetryAfterError } from "../util/retry.js";
 import type { AlertEnvelope } from "./sender.js";
 import { TelegramAlertSender } from "./telegram.js";
@@ -284,5 +285,137 @@ describe("TelegramAlertSender — terminal failure paths", () => {
     await expect(sender.send(envelope())).rejects.toThrow("boom");
     expect(errors).toHaveLength(1);
     expect(errors[0]!.label).toBe("telegram-send");
+  });
+});
+
+describe("TelegramAlertSender — rate limiting", () => {
+  function makeFakeClock() {
+    const state = {
+      now: 0,
+      timers: [] as Array<{ fireAt: number; fn: () => void }>,
+    };
+    const flush = (): Promise<void> =>
+      new Promise<void>((r) => {
+        setImmediate(r);
+      });
+    return {
+      state,
+      nowFn: (): number => state.now,
+      schedule: (fn: () => void, ms: number): void => {
+        state.timers.push({ fireAt: state.now + ms, fn });
+      },
+      flush,
+      drain: async (): Promise<void> => {
+        await flush();
+        while (state.timers.length > 0) {
+          state.timers.sort((a, b) => a.fireAt - b.fireAt);
+          const next = state.timers.shift()!;
+          state.now = Math.max(state.now, next.fireAt);
+          next.fn();
+          await flush();
+        }
+        await flush();
+      },
+    };
+  }
+
+  it("burst of 200 messages does not 429 and preserves per-chat ordering", async () => {
+    const db = makeDb();
+    const clock = makeFakeClock();
+    const limiter = new TokenBucketRateLimiter({
+      globalLimit: 25,
+      perChatLimit: 1,
+      now: clock.nowFn,
+      schedule: clock.schedule,
+    });
+
+    // Fake Telegram api that mirrors the wire 429 contract: rejects with
+    // grammy-shaped 429 if more than 25 calls land in any 1-sec window OR
+    // if a single chat is hit more than once per second.
+    const callsByChat = new Map<number, number[]>();
+    const allCallTimes: number[] = [];
+    const dispatchOrder: Array<{ chatId: number; seq: number }> = [];
+
+    const sender = new TelegramAlertSender({
+      api: {
+        async sendMessage(chatId) {
+          const id = chatId as number;
+          const t = clock.nowFn();
+          // Global cap: 25 within last 1000ms.
+          const inGlobalWindow = allCallTimes.filter((x) => x > t - 1000).length;
+          if (inGlobalWindow >= 25) {
+            throw {
+              error_code: 429,
+              description: "Too Many Requests: global cap exceeded",
+              parameters: { retry_after: 1 },
+            };
+          }
+          // Per-chat cap: 1 within last 1000ms.
+          const chatCalls = callsByChat.get(id) ?? [];
+          const inChatWindow = chatCalls.filter((x) => x > t - 1000).length;
+          if (inChatWindow >= 1) {
+            throw {
+              error_code: 429,
+              description: "Too Many Requests: per-chat cap exceeded",
+              parameters: { retry_after: 1 },
+            };
+          }
+          allCallTimes.push(t);
+          chatCalls.push(t);
+          callsByChat.set(id, chatCalls);
+        },
+      },
+      client: db.client,
+      // Map user_id "u-{i}" → chat id (i % 100). Two messages share each chat
+      // when i and i+100 collide on the same chat.
+      resolveChatId: async (userId) => {
+        const m = /u-(\d+)/.exec(userId);
+        return m ? Number(m[1]) % 100 : null;
+      },
+      formatMessage: (env) => `m-${env.alert_id}`,
+      rateLimiter: limiter,
+    });
+
+    const promises: Promise<void>[] = [];
+    for (let i = 0; i < 200; i++) {
+      const env = envelope({
+        alert_id: `a-${i}`,
+        user_id: `u-${i}`,
+      });
+      const seq = Math.floor(i / 100); // 0 for first pass, 1 for second
+      const chatId = i % 100;
+      const p = sender.send(env).then(() => {
+        dispatchOrder.push({ chatId, seq });
+      });
+      // Pre-attach a no-op so a hypothetical reject doesn't surface as
+      // "rejection handled asynchronously" while we drain timers.
+      p.catch(() => {});
+      promises.push(p);
+    }
+
+    await clock.drain();
+    await Promise.all(promises);
+
+    // All 200 reached Telegram successfully (no 429 ever surfaced).
+    expect(allCallTimes).toHaveLength(200);
+    expect(db.deadletters).toHaveLength(0);
+
+    // No rolling 1-second window contains > 25 sends.
+    const sorted = [...allCallTimes].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length; i++) {
+      let count = 0;
+      for (let j = i; j < sorted.length && sorted[j]! < sorted[i]! + 1000; j++) {
+        count++;
+      }
+      expect(count).toBeLessThanOrEqual(25);
+    }
+
+    // Per-chat ordering preserved: each chat saw seq=0 strictly before seq=1.
+    for (let chatId = 0; chatId < 100; chatId++) {
+      const seqs = dispatchOrder
+        .filter((d) => d.chatId === chatId)
+        .map((d) => d.seq);
+      expect(seqs).toEqual([0, 1]);
+    }
   });
 });
