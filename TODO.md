@@ -421,7 +421,7 @@ acceptance: |
   - Per-chat ordering is preserved
 ```
 
-- [ ] hn-pulse-p2-004-metrics-prom
+- [x] hn-pulse-p2-004-metrics-prom
 
 ```task
 id: hn-pulse-p2-004-metrics-prom
