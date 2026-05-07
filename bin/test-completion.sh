@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
-# bin/test-completion.sh - acceptance test runner for HN Pulse
-# Each criterion runs a SQL probe (or HTTP probe) against the live container.
-# DATABASE_URL must be exported in the environment (the soak monitor passes it via docker exec).
+# bin/test-completion.sh - acceptance test runner for HN Pulse (stage-6 soak).
+#
+# Each criterion runs a SQL probe against the live container's Postgres.
+# DATABASE_URL must be exported in the environment (the soak monitor passes
+# it via docker exec). Probes read from helper views defined in
+# db/migrations/0004_soak_views.sql so the script SQL stays trivial.
+#
+# Pass thresholds (kept identical to Spec.md "stage-6 soak"):
+#   1. lag <300s
+#   2. snapshot freshness >=95%
+#   3. zero NULL p_front_page_6h in last hour
+#   4. alert p95 round-trip <120s
+#   5. Brier score over 7d <=0.20
 
 set -uo pipefail
 BOT_SLUG="hn-pulse"
@@ -17,27 +27,17 @@ run_psql () {
 }
 
 # === CRITERION 1: Poller liveness ===
-# Most recent items.first_seen_at must be within last 5 minutes.
-echo "[criterion-1] Poller liveness (most recent first_seen_at < 5m old)"
-LAG_SECONDS=$(run_psql "SELECT EXTRACT(EPOCH FROM (NOW() - MAX(first_seen_at))) FROM items;")
-if [ -n "${LAG_SECONDS}" ] && awk -v v="${LAG_SECONDS}" 'BEGIN{exit !(v < 300)}'; then
-  echo "  PASS (lag=${LAG_SECONDS}s)"; PASS=$((PASS+1))
+echo "[criterion-1] Poller liveness (most recent first_seen_at <300s old)"
+LAG=$(run_psql "SELECT lag_seconds FROM v_poller_lag;")
+if [ -n "${LAG}" ] && awk -v v="${LAG}" 'BEGIN{exit !(v < 300)}'; then
+  echo "  PASS (lag=${LAG}s)"; PASS=$((PASS+1))
 else
-  echo "  FAIL (lag=${LAG_SECONDS:-NULL}s)"; FAIL=$((FAIL+1))
+  echo "  FAIL (lag=${LAG:-NULL}s)"; FAIL=$((FAIL+1))
 fi
 
 # === CRITERION 2: Snapshot freshness ===
-# At least 95% of tracked items <6h old have a snapshot in last 90s.
 echo "[criterion-2] Snapshot freshness (>=95% of tracked items have snapshot <90s)"
-PCT=$(run_psql "
-WITH tracked AS (
-  SELECT id FROM items WHERE first_seen_at > NOW() - INTERVAL '6 hours'
-), fresh AS (
-  SELECT DISTINCT item_id FROM item_snapshots
-  WHERE taken_at > NOW() - INTERVAL '90 seconds'
-)
-SELECT COALESCE(ROUND(100.0 * COUNT(fresh.item_id) / NULLIF(COUNT(tracked.id), 0), 2), 0)
-FROM tracked LEFT JOIN fresh ON fresh.item_id = tracked.id;")
+PCT=$(run_psql "SELECT freshness_pct FROM v_snapshot_freshness;")
 if [ -n "${PCT}" ] && awk -v v="${PCT}" 'BEGIN{exit !(v >= 95)}'; then
   echo "  PASS (${PCT}%)"; PASS=$((PASS+1))
 else
@@ -45,22 +45,17 @@ else
 fi
 
 # === CRITERION 3: Scorer health ===
-# Every snapshot in last hour has non-NULL p_front_page_6h.
 echo "[criterion-3] Scorer health (no NULL p_front_page_6h in last hour)"
-NULLS=$(run_psql "SELECT COUNT(*) FROM item_snapshots WHERE taken_at > NOW() - INTERVAL '1 hour' AND p_front_page_6h IS NULL;")
+NULLS=$(run_psql "SELECT null_count FROM v_scorer_null_count_1h;")
 if [ "${NULLS:-1}" = "0" ]; then
-  echo "  PASS"; PASS=$((PASS+1))
+  echo "  PASS (null_count=0)"; PASS=$((PASS+1))
 else
-  echo "  FAIL (${NULLS} NULL rows)"; FAIL=$((FAIL+1))
+  echo "  FAIL (null_count=${NULLS:-NULL})"; FAIL=$((FAIL+1))
 fi
 
 # === CRITERION 4: Alert latency ===
-# Synthetic alerts table tracks round-trip — p95 latency must be <120s in last 24h.
 echo "[criterion-4] Alert latency (p95 round-trip <120s in last 24h)"
-P95=$(run_psql "
-SELECT COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (delivered_at - matched_at))), 9999)
-FROM alerts
-WHERE matched_at > NOW() - INTERVAL '24 hours' AND alert_type = 'synthetic';")
+P95=$(run_psql "SELECT p95_seconds FROM v_alert_latency;")
 if [ -n "${P95}" ] && awk -v v="${P95}" 'BEGIN{exit !(v < 120)}'; then
   echo "  PASS (p95=${P95}s)"; PASS=$((PASS+1))
 else
@@ -68,14 +63,8 @@ else
 fi
 
 # === CRITERION 5: Calibration drift ===
-# Brier score over last 7 days <= 0.20.
-echo "[criterion-5] Calibration drift (Brier score over 7d <=0.20)"
-BRIER=$(run_psql "
-SELECT COALESCE(ROUND(AVG(POWER(s.p_front_page_6h - (CASE WHEN i.reached_front_page THEN 1 ELSE 0 END), 2))::numeric, 4), 1)
-FROM item_snapshots s
-JOIN items i ON i.id = s.item_id
-WHERE s.taken_at > NOW() - INTERVAL '7 days'
-  AND i.first_seen_at < NOW() - INTERVAL '6 hours';")
+echo "[criterion-5] Calibration drift (Brier score 7d <=0.20)"
+BRIER=$(run_psql "SELECT brier_score FROM v_calibration_brier_7d;")
 if [ -n "${BRIER}" ] && awk -v v="${BRIER}" 'BEGIN{exit !(v <= 0.20)}'; then
   echo "  PASS (Brier=${BRIER})"; PASS=$((PASS+1))
 else
