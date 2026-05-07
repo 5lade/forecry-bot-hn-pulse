@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type pg from "pg";
+import { childLogger } from "../log.js";
 import { closePool, getPool, withClient } from "./client.js";
 
 export interface MigrationFile {
@@ -126,7 +127,8 @@ export async function migrate(
 }
 
 async function cli(): Promise<void> {
-  const log = (msg: string) => process.stdout.write(`[migrate] ${msg}\n`);
+  const migrateLog = childLogger({ component: "migrate" });
+  const log = (msg: string) => migrateLog.info(msg);
   try {
     const result = await migrate({ log });
     log(
@@ -148,7 +150,7 @@ const isMainModule = (() => {
 
 if (isMainModule) {
   cli().catch((err: unknown) => {
-    process.stderr.write(`[migrate] failed: ${String(err)}\n`);
+    childLogger({ component: "migrate" }).error({ err }, `failed: ${String(err)}`);
     process.exitCode = 1;
     closePool().catch(() => {});
   });

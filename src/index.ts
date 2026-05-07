@@ -7,13 +7,14 @@ import { loadConfig, redactConfig } from "./config.js";
 import { startCron } from "./cron.js";
 import { getPool } from "./db/client.js";
 import type { DigestTelegramSender } from "./jobs/daily-digest.js";
+import { logger, loggerErrorSink, loggerInfoSink, loggerWarnSink } from "./log.js";
 import { startPoller } from "./poller/index.js";
 import { startServer } from "./server.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const safe = redactConfig(config);
-  process.stdout.write(`config loaded: ${JSON.stringify(safe)}\n`);
+  logger.info({ config: safe }, "config loaded");
 
   const pulsePriceId = process.env.PULSE_PRICE_ID ?? "";
   const pulseProPriceId = process.env.PULSE_PRO_PRICE_ID ?? "";
@@ -35,7 +36,7 @@ async function main(): Promise<void> {
       stripe,
       webhookSecret: config.STRIPE_WEBHOOK_SECRET,
       prices: { pulsePriceId, pulseProPriceId },
-      log: (msg) => process.stdout.write(`${msg}\n`),
+      log: loggerInfoSink({ component: "stripe" }),
     },
   });
 
@@ -43,10 +44,8 @@ async function main(): Promise<void> {
     const dispatcherHook = makeDispatcherHook({
       client: dbClient,
       sender: new InMemoryAlertSender(),
-      onError: (err, label) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`[${label}] ${msg}\n`);
-      },
+      log: loggerInfoSink({ component: "alerts" }),
+      onError: loggerErrorSink({ component: "alerts" }),
     });
     startPoller({ client: dbClient, onSnapshotInserted: dispatcherHook });
 
@@ -62,9 +61,9 @@ async function main(): Promise<void> {
         client: dbClient,
         billing,
         publicUrl: config.PUBLIC_URL,
-        log: (msg) => process.stdout.write(`${msg}\n`),
+        log: loggerInfoSink({ component: "bot" }),
       },
-      log: (msg) => process.stdout.write(`${msg}\n`),
+      log: loggerInfoSink({ component: "bot" }),
     });
 
     const telegram: DigestTelegramSender = {
@@ -78,24 +77,18 @@ async function main(): Promise<void> {
         client: dbClient,
         telegram,
         publicUrl: config.PUBLIC_URL,
-        log: (msg) => process.stdout.write(`${msg}\n`),
-        onError: (err, label) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          process.stderr.write(`[${label}] ${msg}\n`);
-        },
+        log: loggerInfoSink({ component: "digest" }),
+        onError: loggerErrorSink({ component: "digest" }),
       },
-      log: (msg) => process.stdout.write(`${msg}\n`),
-      onError: (err, label) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`[cron:${label}] ${msg}\n`);
-      },
+      log: loggerInfoSink({ component: "cron" }),
+      onError: loggerWarnSink({ component: "cron" }),
     });
   }
-  process.stdout.write("hn-pulse ready\n");
+  logger.info("hn-pulse ready");
 }
 
 main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`[startup] fatal: ${msg}\n`);
+  logger.error({ err }, `startup fatal: ${msg}`);
   process.exitCode = 1;
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ItemsQueryClient } from "../db/items.js";
 import { listMatchingWatches } from "../db/watches.js";
+import { childLogger } from "../log.js";
 import {
   matchAlerts,
   type MatchedAlert,
@@ -92,7 +93,8 @@ export async function dispatchAlertsForSnapshot(
   const now = deps.now ?? (() => new Date());
   const dedupWindowMs = deps.dedupWindowMs ?? DEFAULT_DEDUP_WINDOW_MS;
   const generateId = deps.generateId ?? (() => randomUUID());
-  const log = deps.log ?? (() => {});
+  const itemLog = childLogger({ component: "alerts", item_id: snapshot.itemId });
+  const log = deps.log ?? ((msg: string) => itemLog.info(msg));
 
   const watches = await listMatchingWatches(deps.client, {
     itemId: snapshot.itemId,

@@ -3,6 +3,7 @@ import {
   upsertItem,
   type ItemsQueryClient,
 } from "../db/items.js";
+import { childLogger } from "../log.js";
 import {
   scoreAndInsertSnapshot,
   type SnapshotInsertedHook,
@@ -192,12 +193,13 @@ export function startPoller(opts: PollerOptions): PollerHandle {
   const newstoriesInterval = opts.newstoriesIntervalMs ?? NEWSTORIES_INTERVAL_MS;
   const rescanInterval = opts.rescanIntervalMs ?? RESCAN_INTERVAL_MS;
   const windowHours = opts.rescanWindowHours ?? RESCAN_WINDOW_HOURS;
-  const log = opts.log ?? ((msg: string) => process.stdout.write(`${msg}\n`));
+  const pollerLog = childLogger({ component: "poller" });
+  const log = opts.log ?? ((msg: string) => pollerLog.info(msg));
   const onError =
     opts.onError ??
     ((err: unknown, label: string) => {
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[poller:${label}] error: ${msg}\n`);
+      pollerLog.warn({ err, label }, `${label}: ${msg}`);
     });
 
   const seen = new Set<number>();

@@ -14,6 +14,7 @@
 import { writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { childLogger } from "../log.js";
 import {
   type AuthorKarmaBucket,
   type FeatureRow,
@@ -459,8 +460,8 @@ function isCli(): boolean {
 if (isCli()) {
   const model = runTrainingPipeline();
   persistModel(model);
-  // eslint-disable-next-line no-console
-  console.log(
+  childLogger({ component: "train" }).info(
+    { metrics: model.metrics, path: DEFAULT_MODEL_PATH },
     `wrote ${DEFAULT_MODEL_PATH} — n_train=${model.metrics.n_train} ` +
       `n_holdout=${model.metrics.n_holdout} ` +
       `auc=${model.metrics.auc_holdout.toFixed(4)} ` +

@@ -4,6 +4,7 @@ import {
   type DailyDigestDeps,
   type DailyDigestResult,
 } from "./jobs/daily-digest.js";
+import { childLogger } from "./log.js";
 
 export interface CronDeps {
   digest?: DailyDigestDeps;
@@ -56,12 +57,13 @@ export function startCron(deps: CronDeps): CronHandle {
   const setTimeoutFn = deps.setTimeoutImpl ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimeoutFn =
     deps.clearTimeoutImpl ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
-  const log = deps.log ?? (() => {});
+  const cronLog = childLogger({ component: "cron" });
+  const log = deps.log ?? ((msg: string) => cronLog.info(msg));
   const onError =
     deps.onError ??
     ((err: unknown, label: string) => {
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[cron:${label}] ${msg}\n`);
+      cronLog.warn({ err, label }, msg);
     });
 
   let stopped = false;

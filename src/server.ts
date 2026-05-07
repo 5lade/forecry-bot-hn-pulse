@@ -10,6 +10,7 @@ import {
   type HealthQueryClient,
   type LastBatchAtGetter,
 } from "./health.js";
+import { childLogger } from "./log.js";
 import { getLastBatchAt as defaultLastBatchAt } from "./poller/index.js";
 
 export interface CreateAppOptions {
@@ -64,7 +65,7 @@ export function startServer(opts: StartServerOptions = {}): Server {
   const port = opts.port ?? Number(process.env.PORT ?? 8080);
   const app = createApp(opts);
   return app.listen(port, () => {
-    process.stdout.write(`[server] listening on :${port}\n`);
+    childLogger({ component: "server" }).info({ port }, `listening on :${port}`);
   });
 }
 

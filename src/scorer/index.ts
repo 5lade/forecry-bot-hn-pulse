@@ -6,6 +6,7 @@ import {
   type ItemsQueryClient,
   type SnapshotLookupRow,
 } from "../db/items.js";
+import { childLogger } from "../log.js";
 import {
   DEFAULT_BASELINE_WEIGHTS,
   scoreFeaturesBaseline,
@@ -240,6 +241,17 @@ export async function scoreAndInsertSnapshot(
     p_front_page_6h,
     delta_p_5min,
   });
+
+  childLogger({ component: "scorer", item_id: input.item_id }).debug(
+    {
+      taken_at: input.taken_at,
+      p_front_page_6h,
+      delta_p_5min,
+      score: input.score,
+      comments: input.comments,
+    },
+    "snapshot inserted",
+  );
 
   if (opts.onSnapshotInserted) {
     await opts.onSnapshotInserted({
