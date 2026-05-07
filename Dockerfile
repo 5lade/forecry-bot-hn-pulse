@@ -21,7 +21,7 @@ RUN npm ci --omit=dev
 FROM node:22-alpine AS runtime
 WORKDIR /bot
 
-RUN apk add --no-cache postgresql-client ca-certificates
+RUN apk add --no-cache postgresql-client ca-certificates curl
 
 ENV NODE_ENV=production
 
@@ -37,4 +37,4 @@ ENTRYPOINT ["./entrypoint.sh"]
 CMD ["node", "dist/index.js"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD node -e "process.exit(0)" || exit 1
+  CMD curl -fsS http://localhost:8080/health || exit 1
