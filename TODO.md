@@ -87,7 +87,7 @@ acceptance: |
   - HEALTHCHECK still passes
 ```
 
-- [ ] hn-pulse-p0-004-config-secrets
+- [x] hn-pulse-p0-004-config-secrets
 
 ```task
 id: hn-pulse-p0-004-config-secrets
