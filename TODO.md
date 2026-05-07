@@ -236,7 +236,7 @@ acceptance: |
   - At runtime the trained model is loaded; baseline path is unit-tested
 ```
 
-- [ ] hn-pulse-p1-005-alert-dispatcher
+- [x] hn-pulse-p1-005-alert-dispatcher
 
 ```task
 id: hn-pulse-p1-005-alert-dispatcher
