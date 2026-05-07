@@ -1,0 +1,26 @@
+# Build artifacts and local state that should never enter the image context.
+node_modules
+dist
+.git
+.gitignore
+.github
+
+# Secrets and local env
+.env
+.env.*
+
+# Logs and OS noise
+*.log
+logs
+.DS_Store
+
+# Docs / dev-only files (skip to shrink build context)
+README.md
+Spec.md
+TODO.md
+CLAUDE.md
+acceptance-tests.md
+
+# Don't recursively copy the Dockerfile or its sibling .dockerignore
+Dockerfile
+.dockerignore
