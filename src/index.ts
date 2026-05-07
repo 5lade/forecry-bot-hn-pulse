@@ -4,7 +4,9 @@ import { makeStripe, StripeBillingClient } from "./billing/checkout.js";
 import { startBot } from "./bot/index.js";
 import { StubBillingClient, type BillingClient } from "./bot/stripe.js";
 import { loadConfig, redactConfig } from "./config.js";
+import { startCron } from "./cron.js";
 import { getPool } from "./db/client.js";
+import type { DigestTelegramSender } from "./jobs/daily-digest.js";
 import { startPoller } from "./poller/index.js";
 import { startServer } from "./server.js";
 
@@ -54,7 +56,7 @@ async function main(): Promise<void> {
       ? new StripeBillingClient({ stripe, pulsePriceId })
       : new StubBillingClient(config.PUBLIC_URL);
 
-    await startBot({
+    const botHandle = await startBot({
       token: config.TG_BOT_TOKEN,
       deps: {
         client: dbClient,
@@ -63,6 +65,30 @@ async function main(): Promise<void> {
         log: (msg) => process.stdout.write(`${msg}\n`),
       },
       log: (msg) => process.stdout.write(`${msg}\n`),
+    });
+
+    const telegram: DigestTelegramSender = {
+      async sendMessage(chatId, text): Promise<void> {
+        await botHandle.bot.api.sendMessage(chatId, text);
+      },
+    };
+
+    startCron({
+      digest: {
+        client: dbClient,
+        telegram,
+        publicUrl: config.PUBLIC_URL,
+        log: (msg) => process.stdout.write(`${msg}\n`),
+        onError: (err, label) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(`[${label}] ${msg}\n`);
+        },
+      },
+      log: (msg) => process.stdout.write(`${msg}\n`),
+      onError: (err, label) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[cron:${label}] ${msg}\n`);
+      },
     });
   }
   process.stdout.write("hn-pulse ready\n");
