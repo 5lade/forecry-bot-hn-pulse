@@ -162,7 +162,7 @@ acceptance: |
     item_snapshots and items.first_seen_at lag stays <60s
 ```
 
-- [ ] hn-pulse-p1-002-feature-extractor
+- [x] hn-pulse-p1-002-feature-extractor
 
 ```task
 id: hn-pulse-p1-002-feature-extractor
