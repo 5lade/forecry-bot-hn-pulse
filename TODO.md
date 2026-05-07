@@ -507,7 +507,7 @@ acceptance: |
   - Vitest covers all three routes
 ```
 
-- [ ] hn-pulse-p3-003-webhook-out
+- [x] hn-pulse-p3-003-webhook-out
 
 ```task
 id: hn-pulse-p3-003-webhook-out
