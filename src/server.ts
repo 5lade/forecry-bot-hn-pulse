@@ -6,9 +6,12 @@ import {
 } from "./billing/webhook.js";
 import { getPool } from "./db/client.js";
 import {
-  runHealthChecks,
+  failedDependencies,
+  liveness,
+  runReadiness,
   type HealthQueryClient,
-  type LastBatchAtGetter,
+  type StripePing,
+  type TelegramGetMe,
 } from "./health.js";
 import { childLogger } from "./log.js";
 import { renderMetrics } from "./metrics.js";
@@ -17,13 +20,28 @@ import { getLastBatchAt as defaultLastBatchAt } from "./poller/index.js";
 export interface CreateAppOptions {
   client?: HealthQueryClient;
   now?: () => Date;
-  getLastBatchAt?: LastBatchAtGetter;
+  getLastBatchAt?: () => Date | null;
+  telegramGetMe?: TelegramGetMe;
+  stripePing?: StripePing;
+  startedAt?: number;
+  version?: string;
+  pollIntervalMs?: number;
+  pollLagMultiplier?: number;
+  readinessTimeoutMs?: number;
   /** When provided, mounts POST /stripe/webhook with raw-body parsing. */
   stripeWebhook?: WebhookHandlerDeps;
 }
 
+const notConfigured =
+  (label: string): (() => Promise<never>) =>
+  async () => {
+    throw new Error(`${label} not configured`);
+  };
+
 export function createApp(opts: CreateAppOptions = {}): Express {
   const app = express();
+  const log = childLogger({ component: "server" });
+
   const client: HealthQueryClient =
     opts.client ?? {
       async query<T extends Record<string, unknown>>(
@@ -39,6 +57,8 @@ export function createApp(opts: CreateAppOptions = {}): Express {
     };
   const now = opts.now ?? (() => new Date());
   const getLastBatchAt = opts.getLastBatchAt ?? defaultLastBatchAt;
+  const telegramGetMe = opts.telegramGetMe ?? notConfigured("telegram");
+  const stripePing = opts.stripePing ?? notConfigured("stripe");
 
   // Stripe needs the exact raw body for signature verification; mount
   // express.raw on this route only and *before* any global JSON parser.
@@ -50,8 +70,33 @@ export function createApp(opts: CreateAppOptions = {}): Express {
     );
   }
 
-  app.get("/health", async (_req, res) => {
-    const report = await runHealthChecks(client, now, getLastBatchAt);
+  app.get("/health", (_req, res) => {
+    res.status(200).json(
+      liveness({
+        startedAt: opts.startedAt,
+        version: opts.version,
+      }),
+    );
+  });
+
+  app.get("/healthz", async (_req, res) => {
+    const report = await runReadiness({
+      client,
+      getLastBatchAt,
+      telegramGetMe,
+      stripePing,
+      now,
+      pollIntervalMs: opts.pollIntervalMs,
+      pollLagMultiplier: opts.pollLagMultiplier,
+      timeoutMs: opts.readinessTimeoutMs,
+    });
+    if (!report.ok) {
+      const failed = failedDependencies(report);
+      log.warn(
+        { failed, checks: report.checks },
+        `readiness failed: ${failed.join(",")}`,
+      );
+    }
     res.status(report.ok ? 200 : 503).json(report);
   });
 

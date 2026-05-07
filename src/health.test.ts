@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_POLL_INTERVAL_MS,
+  DEFAULT_POLL_LAG_MULTIPLIER,
   type HealthQueryClient,
-  POLLER_LIVENESS_WINDOW_MS,
   checkDb,
-  checkPollerLiveness,
-  runHealthChecks,
+  checkPollerLag,
+  checkStripe,
+  checkTelegram,
+  failedDependencies,
+  liveness,
+  runReadiness,
 } from "./health.js";
 
 type Handler = (
@@ -24,123 +29,213 @@ function mockClient(handler: Handler): HealthQueryClient {
   };
 }
 
-const fixedNow = new Date("2025-01-01T00:05:00Z");
-const now = () => fixedNow;
+describe("liveness", () => {
+  it("returns status ok plus uptime + version with no I/O", () => {
+    const startedAt = 1000;
+    const report = liveness({
+      now: () => 5500,
+      startedAt,
+      version: "9.9.9",
+    });
+    expect(report.status).toBe("ok");
+    expect(report.uptime).toBeCloseTo(4.5, 5);
+    expect(report.version).toBe("9.9.9");
+  });
+
+  it("clamps negative uptime to zero (clock skew tolerant)", () => {
+    const report = liveness({
+      now: () => 100,
+      startedAt: 500,
+      version: "0.0.1",
+    });
+    expect(report.uptime).toBe(0);
+  });
+
+  it("falls back to package.json version when not provided", () => {
+    const report = liveness({ now: () => 1, startedAt: 0 });
+    expect(typeof report.version).toBe("string");
+    expect(report.version.length).toBeGreaterThan(0);
+  });
+});
 
 describe("checkDb", () => {
   it("returns ok when SELECT 1 succeeds", async () => {
     const client = mockClient(async () => ({ rows: [] }));
     const res = await checkDb(client);
-    expect(res.ok).toBe(true);
-    expect(res.detail).toBeUndefined();
+    expect(res.status).toBe("ok");
+    expect(res.reason).toBeUndefined();
   });
 
-  it("returns not ok with detail when query throws", async () => {
+  it("returns down with reason when query throws", async () => {
     const client = mockClient(async () => {
       throw new Error("ECONNREFUSED");
     });
     const res = await checkDb(client);
-    expect(res.ok).toBe(false);
-    expect(res.detail).toContain("db unreachable");
-    expect(res.detail).toContain("ECONNREFUSED");
+    expect(res.status).toBe("down");
+    expect(res.reason).toContain("ECONNREFUSED");
+  });
+
+  it("treats slow queries past the timeout as down", async () => {
+    const client: HealthQueryClient = {
+      async query() {
+        await new Promise((r) => setTimeout(r, 50));
+        return { rows: [] };
+      },
+    };
+    const res = await checkDb(client, 5);
+    expect(res.status).toBe("down");
+    expect(res.reason).toMatch(/timed out/);
   });
 });
 
-describe("checkPollerLiveness", () => {
-  it("ok when most recent items.first_seen_at is within the window", async () => {
-    const client = mockClient(async () => ({
-      rows: [{ first_seen_at: new Date("2025-01-01T00:01:00Z") }],
-    }));
-    const res = await checkPollerLiveness(client, now);
-    expect(res.ok).toBe(true);
-  });
+describe("checkPollerLag", () => {
+  const now = new Date("2025-01-01T00:00:00Z");
 
-  it("not ok when most recent first_seen_at is older than 5 minutes", async () => {
-    const client = mockClient(async () => ({
-      rows: [{ first_seen_at: new Date("2024-12-31T23:55:00Z") }],
-    }));
-    const res = await checkPollerLiveness(client, now);
-    expect(res.ok).toBe(false);
-    expect(res.detail).toMatch(/poller stalled/);
-  });
-
-  it("not ok when there are no items at all (max returns null)", async () => {
-    const client = mockClient(async () => ({
-      rows: [{ first_seen_at: null }],
-    }));
-    const res = await checkPollerLiveness(client, now);
-    expect(res.ok).toBe(false);
-    expect(res.detail).toMatch(/no items/);
-  });
-
-  it("not ok when result set is empty", async () => {
-    const client = mockClient(async () => ({ rows: [] }));
-    const res = await checkPollerLiveness(client, now);
-    expect(res.ok).toBe(false);
-    expect(res.detail).toMatch(/no items/);
-  });
-
-  it("accepts ISO string return values from the DB driver", async () => {
-    const client = mockClient(async () => ({
-      rows: [{ first_seen_at: "2025-01-01T00:03:00Z" }],
-    }));
-    const res = await checkPollerLiveness(client, now);
-    expect(res.ok).toBe(true);
-  });
-
-  it("returns not ok when query throws", async () => {
-    const client = mockClient(async () => {
-      throw new Error('relation "items" does not exist');
+  it("ok when last poll is within 3× the expected interval", () => {
+    const last = new Date(now.getTime() - DEFAULT_POLL_INTERVAL_MS * 2);
+    const res = checkPollerLag({
+      getLastBatchAt: () => last,
+      now: () => now,
     });
-    const res = await checkPollerLiveness(client, now);
-    expect(res.ok).toBe(false);
-    expect(res.detail).toContain("poller check failed");
+    expect(res.status).toBe("ok");
   });
 
-  it("respects a custom window argument", async () => {
-    const client = mockClient(async () => ({
-      rows: [{ first_seen_at: new Date("2025-01-01T00:04:00Z") }],
-    }));
-    const res = await checkPollerLiveness(client, now, 30 * 1000);
-    expect(res.ok).toBe(false);
+  it("down when no poll has been recorded", () => {
+    const res = checkPollerLag({
+      getLastBatchAt: () => null,
+      now: () => now,
+    });
+    expect(res.status).toBe("down");
+    expect(res.reason).toMatch(/no successful poll/);
   });
 
-  it("default window is 5 minutes", () => {
-    expect(POLLER_LIVENESS_WINDOW_MS).toBe(5 * 60 * 1000);
+  it("down when lag exceeds 3× the expected interval", () => {
+    const last = new Date(
+      now.getTime() - DEFAULT_POLL_INTERVAL_MS * (DEFAULT_POLL_LAG_MULTIPLIER + 1),
+    );
+    const res = checkPollerLag({
+      getLastBatchAt: () => last,
+      now: () => now,
+    });
+    expect(res.status).toBe("down");
+    expect(res.reason).toMatch(/poll lag/);
   });
 });
 
-describe("runHealthChecks", () => {
-  it("ok=true when both checks pass", async () => {
-    const client = mockClient(async (text) => {
-      if (text.startsWith("SELECT 1")) return { rows: [] };
-      return { rows: [{ first_seen_at: new Date("2025-01-01T00:04:00Z") }] };
+describe("checkTelegram", () => {
+  it("ok when getMe resolves", async () => {
+    const res = await checkTelegram(async () => ({ ok: true }));
+    expect(res.status).toBe("ok");
+  });
+
+  it("down when getMe rejects", async () => {
+    const res = await checkTelegram(async () => {
+      throw new Error("401 Unauthorized");
     });
-    const report = await runHealthChecks(client, now);
+    expect(res.status).toBe("down");
+    expect(res.reason).toMatch(/401/);
+  });
+
+  it("down when getMe takes longer than the timeout", async () => {
+    const res = await checkTelegram(
+      () => new Promise((r) => setTimeout(() => r({}), 50)),
+      5,
+    );
+    expect(res.status).toBe("down");
+    expect(res.reason).toMatch(/timed out/);
+  });
+});
+
+describe("checkStripe", () => {
+  it("ok when ping resolves", async () => {
+    const res = await checkStripe(async () => ({ available: [] }));
+    expect(res.status).toBe("ok");
+  });
+
+  it("down when ping rejects", async () => {
+    const res = await checkStripe(async () => {
+      throw new Error("invalid_api_key");
+    });
+    expect(res.status).toBe("down");
+    expect(res.reason).toMatch(/invalid_api_key/);
+  });
+});
+
+describe("runReadiness", () => {
+  const okClient = mockClient(async () => ({ rows: [] }));
+  const okGetMe = async () => ({ ok: true });
+  const okPing = async () => ({ available: [] });
+  const now = () => new Date("2025-01-01T00:00:00Z");
+  const recentPoll = () => new Date("2024-12-31T23:59:30Z");
+
+  it("ok=true when every check passes", async () => {
+    const report = await runReadiness({
+      client: okClient,
+      getLastBatchAt: recentPoll,
+      telegramGetMe: okGetMe,
+      stripePing: okPing,
+      now,
+    });
     expect(report.ok).toBe(true);
-    expect(report.checks.db.ok).toBe(true);
-    expect(report.checks.poller.ok).toBe(true);
+    expect(report.checks.db.status).toBe("ok");
+    expect(report.checks.poller.status).toBe("ok");
+    expect(report.checks.telegram.status).toBe("ok");
+    expect(report.checks.stripe.status).toBe("ok");
+    expect(failedDependencies(report)).toEqual([]);
   });
 
-  it("ok=false when db is unreachable; poller is reported as skipped", async () => {
-    const client = mockClient(async () => {
-      throw new Error("connection refused");
+  it("ok=false and identifies db when SELECT 1 throws", async () => {
+    const report = await runReadiness({
+      client: mockClient(async () => {
+        throw new Error("connection refused");
+      }),
+      getLastBatchAt: recentPoll,
+      telegramGetMe: okGetMe,
+      stripePing: okPing,
+      now,
     });
-    const report = await runHealthChecks(client, now);
     expect(report.ok).toBe(false);
-    expect(report.checks.db.ok).toBe(false);
-    expect(report.checks.poller.ok).toBe(false);
-    expect(report.checks.poller.detail).toMatch(/skipped/);
+    expect(report.checks.db.status).toBe("down");
+    expect(failedDependencies(report)).toEqual(["db"]);
   });
 
-  it("ok=false when poller is stalled", async () => {
-    const client = mockClient(async (text) => {
-      if (text.startsWith("SELECT 1")) return { rows: [] };
-      return { rows: [{ first_seen_at: new Date("2024-12-31T22:00:00Z") }] };
+  it("ok=false and identifies poller when lag is too high", async () => {
+    const report = await runReadiness({
+      client: okClient,
+      getLastBatchAt: () => new Date("2024-12-31T22:00:00Z"),
+      telegramGetMe: okGetMe,
+      stripePing: okPing,
+      now,
     });
-    const report = await runHealthChecks(client, now);
     expect(report.ok).toBe(false);
-    expect(report.checks.db.ok).toBe(true);
-    expect(report.checks.poller.ok).toBe(false);
+    expect(failedDependencies(report)).toEqual(["poller"]);
+  });
+
+  it("ok=false and identifies telegram when getMe rejects", async () => {
+    const report = await runReadiness({
+      client: okClient,
+      getLastBatchAt: recentPoll,
+      telegramGetMe: async () => {
+        throw new Error("telegram 503");
+      },
+      stripePing: okPing,
+      now,
+    });
+    expect(report.ok).toBe(false);
+    expect(failedDependencies(report)).toEqual(["telegram"]);
+  });
+
+  it("ok=false and identifies stripe when ping rejects", async () => {
+    const report = await runReadiness({
+      client: okClient,
+      getLastBatchAt: recentPoll,
+      telegramGetMe: okGetMe,
+      stripePing: async () => {
+        throw new Error("stripe 500");
+      },
+      now,
+    });
+    expect(report.ok).toBe(false);
+    expect(failedDependencies(report)).toEqual(["stripe"]);
   });
 });

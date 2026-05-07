@@ -1,9 +1,14 @@
 import type { AddressInfo } from "node:net";
+import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
-import type { HealthQueryClient } from "./health.js";
-import { createApp } from "./server.js";
+import type {
+  HealthQueryClient,
+  StripePing,
+  TelegramGetMe,
+} from "./health.js";
+import { createApp, type CreateAppOptions } from "./server.js";
 
-function client(handler: (text: string) => Promise<unknown>): HealthQueryClient {
+function dbClient(handler: (text: string) => Promise<unknown>): HealthQueryClient {
   return {
     async query<T extends Record<string, unknown>>(
       text: string,
@@ -14,25 +19,42 @@ function client(handler: (text: string) => Promise<unknown>): HealthQueryClient 
   };
 }
 
-const okHandler = async (text: string) => {
-  if (text.startsWith("SELECT 1")) return [];
-  return [{ first_seen_at: new Date() }];
-};
-
-const stalledHandler = async (text: string) => {
-  if (text.startsWith("SELECT 1")) return [];
-  return [{ first_seen_at: new Date(Date.now() - 60 * 60 * 1000) }];
-};
-
-const dbDownHandler = async () => {
+const okDb: HealthQueryClient = dbClient(async () => []);
+const downDb: HealthQueryClient = dbClient(async () => {
   throw new Error("ECONNREFUSED");
+});
+const okGetMe: TelegramGetMe = async () => ({ ok: true });
+const downGetMe: TelegramGetMe = async () => {
+  throw new Error("telegram unauthorized");
+};
+const okPing: StripePing = async () => ({ available: [] });
+const downPing: StripePing = async () => {
+  throw new Error("stripe down");
+};
+
+function fixedNow(): Date {
+  return new Date("2025-01-01T00:00:00Z");
+}
+function recentPoll(): Date {
+  return new Date("2024-12-31T23:59:30Z");
+}
+function stalePoll(): Date {
+  return new Date("2024-12-31T22:00:00Z");
+}
+
+const okOpts: CreateAppOptions = {
+  client: okDb,
+  telegramGetMe: okGetMe,
+  stripePing: okPing,
+  getLastBatchAt: recentPoll,
+  now: fixedNow,
 };
 
 async function withServer<T>(
-  c: HealthQueryClient,
+  opts: CreateAppOptions,
   fn: (port: number) => Promise<T>,
 ): Promise<T> {
-  const app = createApp({ client: c });
+  const app = createApp(opts);
   const server = app.listen(0);
   try {
     await new Promise<void>((resolve) => server.once("listening", resolve));
@@ -43,49 +65,123 @@ async function withServer<T>(
   }
 }
 
-describe("GET /health", () => {
-  it("returns 200 with ok=true when db and poller are healthy", async () => {
-    await withServer(client(okHandler), async (port) => {
-      const res = await fetch(`http://127.0.0.1:${port}/health`);
+describe("GET /health (cheap liveness)", () => {
+  it("returns 200 with status ok, uptime, and version — no I/O", async () => {
+    await withServer(
+      { startedAt: Date.now() - 1500, version: "9.9.9" },
+      async (port) => {
+        const res = await fetch(`http://127.0.0.1:${port}/health`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as {
+          status: string;
+          uptime: number;
+          version: string;
+        };
+        expect(body.status).toBe("ok");
+        expect(body.version).toBe("9.9.9");
+        expect(body.uptime).toBeGreaterThanOrEqual(1.4);
+      },
+    );
+  });
+
+  it("p99 latency under 50ms across 200 calls", async () => {
+    await withServer({}, async (port) => {
+      const url = `http://127.0.0.1:${port}/health`;
+      // Warm up so the JIT and HTTP client connection pool stabilize.
+      for (let i = 0; i < 10; i += 1) {
+        const res = await fetch(url);
+        await res.text();
+      }
+      const samples: number[] = [];
+      for (let i = 0; i < 200; i += 1) {
+        const start = performance.now();
+        const res = await fetch(url);
+        await res.text();
+        samples.push(performance.now() - start);
+      }
+      samples.sort((a, b) => a - b);
+      const p99 = samples[Math.ceil(samples.length * 0.99) - 1];
+      expect(p99).toBeLessThan(50);
+    });
+  });
+});
+
+describe("GET /healthz (deep readiness)", () => {
+  it("returns 200 + ok=true when every dependency is healthy", async () => {
+    await withServer(okOpts, async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         ok: boolean;
-        checks: { db: { ok: boolean }; poller: { ok: boolean } };
+        checks: Record<string, { status: string }>;
       };
       expect(body.ok).toBe(true);
-      expect(body.checks.db.ok).toBe(true);
-      expect(body.checks.poller.ok).toBe(true);
+      expect(body.checks.db.status).toBe("ok");
+      expect(body.checks.poller.status).toBe("ok");
+      expect(body.checks.telegram.status).toBe("ok");
+      expect(body.checks.stripe.status).toBe("ok");
     });
   });
 
-  it("returns 503 with JSON body when DB is unreachable", async () => {
-    await withServer(client(dbDownHandler), async (port) => {
-      const res = await fetch(`http://127.0.0.1:${port}/health`);
+  it("returns 503 + identifies db when SELECT 1 fails", async () => {
+    await withServer({ ...okOpts, client: downDb }, async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
       expect(res.status).toBe(503);
       const body = (await res.json()) as {
         ok: boolean;
-        checks: {
-          db: { ok: boolean; detail?: string };
-          poller: { ok: boolean };
+        checks: Record<string, { status: string; reason?: string }>;
+      };
+      expect(body.ok).toBe(false);
+      expect(body.checks.db.status).toBe("down");
+      expect(body.checks.db.reason).toBeTruthy();
+      expect(body.checks.poller.status).toBe("ok");
+      expect(body.checks.telegram.status).toBe("ok");
+      expect(body.checks.stripe.status).toBe("ok");
+    });
+  });
+
+  it("returns 503 + identifies poller when last poll is stale", async () => {
+    await withServer(
+      { ...okOpts, getLastBatchAt: stalePoll },
+      async (port) => {
+        const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+        expect(res.status).toBe(503);
+        const body = (await res.json()) as {
+          ok: boolean;
+          checks: Record<string, { status: string; reason?: string }>;
         };
-      };
-      expect(body.ok).toBe(false);
-      expect(body.checks.db.ok).toBe(false);
-      expect(body.checks.db.detail).toBeDefined();
-    });
+        expect(body.ok).toBe(false);
+        expect(body.checks.poller.status).toBe("down");
+        expect(body.checks.poller.reason).toMatch(/poll lag/);
+      },
+    );
   });
 
-  it("returns 503 when poller is stalled", async () => {
-    await withServer(client(stalledHandler), async (port) => {
-      const res = await fetch(`http://127.0.0.1:${port}/health`);
+  it("returns 503 + identifies telegram when getMe fails", async () => {
+    await withServer({ ...okOpts, telegramGetMe: downGetMe }, async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
       expect(res.status).toBe(503);
       const body = (await res.json()) as {
         ok: boolean;
-        checks: { poller: { ok: boolean; detail?: string } };
+        checks: Record<string, { status: string; reason?: string }>;
       };
       expect(body.ok).toBe(false);
-      expect(body.checks.poller.ok).toBe(false);
-      expect(body.checks.poller.detail).toMatch(/poller stalled/);
+      expect(body.checks.telegram.status).toBe("down");
+      expect(body.checks.telegram.reason).toMatch(/unauthorized/);
+    });
+  });
+
+  it("returns 503 + identifies stripe when ping fails", async () => {
+    await withServer({ ...okOpts, stripePing: downPing }, async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as {
+        ok: boolean;
+        checks: Record<string, { status: string; reason?: string }>;
+      };
+      expect(body.ok).toBe(false);
+      expect(body.checks.stripe.status).toBe("down");
+      expect(body.checks.stripe.reason).toMatch(/stripe down/);
     });
   });
 });

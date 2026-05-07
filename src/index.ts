@@ -34,6 +34,15 @@ async function main(): Promise<void> {
 
   setActiveWatchesProvider(() => countActiveWatches(dbClient));
 
+  const telegramGetMe = async (): Promise<unknown> => {
+    const res = await fetch(
+      `https://api.telegram.org/bot${config.TG_BOT_TOKEN}/getMe`,
+    );
+    if (!res.ok) throw new Error(`telegram getMe HTTP ${res.status}`);
+    return res.json();
+  };
+  const stripePing = async (): Promise<unknown> => stripe.balance.retrieve();
+
   startServer({
     stripeWebhook: {
       client: dbClient,
@@ -42,6 +51,8 @@ async function main(): Promise<void> {
       prices: { pulsePriceId, pulseProPriceId },
       log: loggerInfoSink({ component: "stripe" }),
     },
+    telegramGetMe,
+    stripePing,
   });
 
   if (process.env.NODE_ENV !== "test") {

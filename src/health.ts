@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 export interface HealthQueryClient {
   query<T extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
@@ -5,80 +9,201 @@ export interface HealthQueryClient {
   ): Promise<{ rows: T[] }>;
 }
 
-export interface HealthCheckResult {
-  ok: boolean;
-  detail?: string;
+export type DependencyStatus = "ok" | "down";
+
+export interface DependencyCheck {
+  status: DependencyStatus;
+  reason?: string;
 }
 
-export interface HealthReport {
+export interface LivenessReport {
+  status: "ok";
+  uptime: number;
+  version: string;
+}
+
+export type ReadinessCheckName = "db" | "poller" | "telegram" | "stripe";
+
+export interface ReadinessReport {
   ok: boolean;
-  lastBatchAt: string | null;
-  checks: {
-    db: HealthCheckResult;
-    poller: HealthCheckResult;
+  checks: Record<ReadinessCheckName, DependencyCheck>;
+}
+
+const PROCESS_STARTED_AT_MS = Date.now();
+
+let cachedVersion: string | null = null;
+
+function readPackageVersion(): string {
+  if (cachedVersion !== null) return cachedVersion;
+  try {
+    // src/health.ts → ../package.json; dist/health.js → ../package.json.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const raw = readFileSync(resolve(here, "..", "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    cachedVersion =
+      typeof parsed.version === "string" ? parsed.version : "unknown";
+  } catch {
+    cachedVersion = "unknown";
+  }
+  return cachedVersion;
+}
+
+export interface LivenessOptions {
+  now?: () => number;
+  startedAt?: number;
+  version?: string;
+}
+
+/**
+ * Cheap liveness probe — strictly synchronous, no I/O. Safe to call on the
+ * /health hot path with a tight latency budget.
+ */
+export function liveness(opts: LivenessOptions = {}): LivenessReport {
+  const now = opts.now ? opts.now() : Date.now();
+  const startedAt = opts.startedAt ?? PROCESS_STARTED_AT_MS;
+  const version = opts.version ?? readPackageVersion();
+  return {
+    status: "ok",
+    uptime: Math.max(0, (now - startedAt) / 1000),
+    version,
   };
 }
 
-export type LastBatchAtGetter = () => Date | null;
+export const DEFAULT_POLL_INTERVAL_MS = 30_000;
+export const DEFAULT_POLL_LAG_MULTIPLIER = 3;
+export const DEFAULT_DEEP_CHECK_TIMEOUT_MS = 2_000;
 
-export const POLLER_LIVENESS_WINDOW_MS = 5 * 60 * 1000;
+function reasonOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function withTimeout<T>(
+  fn: () => Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export async function checkDb(
   client: HealthQueryClient,
-): Promise<HealthCheckResult> {
+  timeoutMs: number = DEFAULT_DEEP_CHECK_TIMEOUT_MS,
+): Promise<DependencyCheck> {
   try {
-    await client.query("SELECT 1");
-    return { ok: true };
+    await withTimeout(() => client.query("SELECT 1"), timeoutMs, "db SELECT 1");
+    return { status: "ok" };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, detail: `db unreachable: ${msg}` };
+    return { status: "down", reason: reasonOf(err) };
   }
 }
 
-export async function checkPollerLiveness(
-  client: HealthQueryClient,
-  now: () => Date = () => new Date(),
-  windowMs: number = POLLER_LIVENESS_WINDOW_MS,
-): Promise<HealthCheckResult> {
+export interface PollerLagCheckOptions {
+  getLastBatchAt: () => Date | null;
+  intervalMs?: number;
+  multiplier?: number;
+  now?: () => Date;
+}
+
+export function checkPollerLag(opts: PollerLagCheckOptions): DependencyCheck {
+  const intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const multiplier = opts.multiplier ?? DEFAULT_POLL_LAG_MULTIPLIER;
+  const now = (opts.now ?? (() => new Date()))();
+  const last = opts.getLastBatchAt();
+  if (!last) {
+    return { status: "down", reason: "no successful poll recorded yet" };
+  }
+  const lagMs = now.getTime() - last.getTime();
+  if (Number.isNaN(lagMs)) {
+    return { status: "down", reason: "invalid last poll timestamp" };
+  }
+  const threshold = intervalMs * multiplier;
+  if (lagMs > threshold) {
+    return {
+      status: "down",
+      reason: `poll lag ${Math.round(lagMs / 1000)}s exceeds ${Math.round(
+        threshold / 1000,
+      )}s`,
+    };
+  }
+  return { status: "ok" };
+}
+
+export type TelegramGetMe = () => Promise<unknown>;
+export type StripePing = () => Promise<unknown>;
+
+export async function checkTelegram(
+  getMe: TelegramGetMe,
+  timeoutMs: number = DEFAULT_DEEP_CHECK_TIMEOUT_MS,
+): Promise<DependencyCheck> {
   try {
-    const res = await client.query<{ first_seen_at: Date | string | null }>(
-      "SELECT MAX(first_seen_at) AS first_seen_at FROM items",
-    );
-    const raw = res.rows[0]?.first_seen_at ?? null;
-    if (raw === null) {
-      return { ok: false, detail: "poller stalled: no items recorded" };
-    }
-    const lastSeen = raw instanceof Date ? raw : new Date(raw);
-    const ageMs = now().getTime() - lastSeen.getTime();
-    if (Number.isNaN(ageMs)) {
-      return { ok: false, detail: "poller stalled: invalid first_seen_at" };
-    }
-    if (ageMs > windowMs) {
-      return {
-        ok: false,
-        detail: `poller stalled: last item ${Math.floor(ageMs / 1000)}s ago`,
-      };
-    }
-    return { ok: true };
+    await withTimeout(getMe, timeoutMs, "telegram getMe");
+    return { status: "ok" };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, detail: `poller check failed: ${msg}` };
+    return { status: "down", reason: reasonOf(err) };
   }
 }
 
-export async function runHealthChecks(
-  client: HealthQueryClient,
-  now: () => Date = () => new Date(),
-  getLastBatchAt: LastBatchAtGetter = () => null,
-): Promise<HealthReport> {
-  const db = await checkDb(client);
-  const poller: HealthCheckResult = db.ok
-    ? await checkPollerLiveness(client, now)
-    : { ok: false, detail: "skipped: db unreachable" };
-  const lastBatch = getLastBatchAt();
-  return {
-    ok: db.ok && poller.ok,
-    lastBatchAt: lastBatch ? lastBatch.toISOString() : null,
-    checks: { db, poller },
-  };
+export async function checkStripe(
+  ping: StripePing,
+  timeoutMs: number = DEFAULT_DEEP_CHECK_TIMEOUT_MS,
+): Promise<DependencyCheck> {
+  try {
+    await withTimeout(ping, timeoutMs, "stripe ping");
+    return { status: "ok" };
+  } catch (err) {
+    return { status: "down", reason: reasonOf(err) };
+  }
+}
+
+export interface ReadinessDeps {
+  client: HealthQueryClient;
+  getLastBatchAt: () => Date | null;
+  telegramGetMe: TelegramGetMe;
+  stripePing: StripePing;
+  now?: () => Date;
+  pollIntervalMs?: number;
+  pollLagMultiplier?: number;
+  timeoutMs?: number;
+}
+
+export async function runReadiness(
+  deps: ReadinessDeps,
+): Promise<ReadinessReport> {
+  const timeoutMs = deps.timeoutMs ?? DEFAULT_DEEP_CHECK_TIMEOUT_MS;
+  const [db, telegram, stripe] = await Promise.all([
+    checkDb(deps.client, timeoutMs),
+    checkTelegram(deps.telegramGetMe, timeoutMs),
+    checkStripe(deps.stripePing, timeoutMs),
+  ]);
+  const poller = checkPollerLag({
+    getLastBatchAt: deps.getLastBatchAt,
+    intervalMs: deps.pollIntervalMs,
+    multiplier: deps.pollLagMultiplier,
+    now: deps.now,
+  });
+  const ok =
+    db.status === "ok" &&
+    poller.status === "ok" &&
+    telegram.status === "ok" &&
+    stripe.status === "ok";
+  return { ok, checks: { db, poller, telegram, stripe } };
+}
+
+export function failedDependencies(report: ReadinessReport): ReadinessCheckName[] {
+  return (Object.keys(report.checks) as ReadinessCheckName[]).filter(
+    (name) => report.checks[name].status === "down",
+  );
 }
