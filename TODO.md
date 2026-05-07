@@ -62,7 +62,7 @@ acceptance: |
   - `bin/test-completion.sh` SQL probes parse cleanly against the schema
 ```
 
-- [ ] hn-pulse-p0-003-dockerfile-extend
+- [x] hn-pulse-p0-003-dockerfile-extend
 
 ```task
 id: hn-pulse-p0-003-dockerfile-extend
