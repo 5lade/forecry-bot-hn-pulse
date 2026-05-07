@@ -467,7 +467,7 @@ acceptance: |
 
 ## P3 — Nice-to-have (deferred)
 
-- [ ] hn-pulse-p3-001-weekly-calibration
+- [x] hn-pulse-p3-001-weekly-calibration
 
 ```task
 id: hn-pulse-p3-001-weekly-calibration
