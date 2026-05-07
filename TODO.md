@@ -332,7 +332,7 @@ acceptance: |
   - Empty users (no watches) get no message
 ```
 
-- [ ] hn-pulse-p1-009-soak-criteria-views
+- [x] hn-pulse-p1-009-soak-criteria-views
 
 ```task
 id: hn-pulse-p1-009-soak-criteria-views
