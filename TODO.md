@@ -138,7 +138,7 @@ acceptance: |
 
 ## P1 — Core features
 
-- [ ] hn-pulse-p1-001-hn-poller
+- [x] hn-pulse-p1-001-hn-poller
 
 ```task
 id: hn-pulse-p1-001-hn-poller
