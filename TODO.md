@@ -261,7 +261,7 @@ acceptance: |
   - alerts.delivered_at is populated within 5s in the happy path
 ```
 
-- [ ] hn-pulse-p1-006-telegram-bot
+- [x] hn-pulse-p1-006-telegram-bot
 
 ```task
 id: hn-pulse-p1-006-telegram-bot
