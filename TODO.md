@@ -36,7 +36,7 @@ acceptance: |
   - tsconfig strict mode is on; no `any` in src/index.ts
 ```
 
-- [ ] hn-pulse-p0-002-db-schema
+- [x] hn-pulse-p0-002-db-schema
 
 ```task
 id: hn-pulse-p0-002-db-schema
