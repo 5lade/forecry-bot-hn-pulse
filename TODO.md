@@ -359,7 +359,7 @@ acceptance: |
 
 ## P2 — Polish
 
-- [ ] hn-pulse-p2-001-structured-logging
+- [x] hn-pulse-p2-001-structured-logging
 
 ```task
 id: hn-pulse-p2-001-structured-logging
