@@ -13,6 +13,7 @@ import {
   type StripePing,
   type TelegramGetMe,
 } from "./health.js";
+import type { PlotStore } from "./jobs/plot-store.js";
 import { childLogger } from "./log.js";
 import { renderMetrics } from "./metrics.js";
 import { getLastBatchAt as defaultLastBatchAt } from "./poller/index.js";
@@ -30,6 +31,8 @@ export interface CreateAppOptions {
   readinessTimeoutMs?: number;
   /** When provided, mounts POST /stripe/webhook with raw-body parsing. */
   stripeWebhook?: WebhookHandlerDeps;
+  /** When provided, mounts GET /plots/:key.png to serve cached plots. */
+  plotStore?: PlotStore;
 }
 
 const notConfigured =
@@ -105,6 +108,33 @@ export function createApp(opts: CreateAppOptions = {}): Express {
     res.set("Content-Type", contentType);
     res.send(body);
   });
+
+  if (opts.plotStore) {
+    const plotStore = opts.plotStore;
+    // The path captures any "key.png" — including slashes — so callers can
+    // namespace plots like "weekly-calibration/2026-05-04/<uuid>.png".
+    app.get(/^\/plots\/(.+)\.png$/, async (req, res) => {
+      const match = req.params[0];
+      const key = typeof match === "string" ? match : "";
+      if (!key) {
+        res.status(400).json({ error: "missing plot key" });
+        return;
+      }
+      try {
+        const png = await plotStore.get(key);
+        if (!png) {
+          res.status(404).json({ error: "plot not found" });
+          return;
+        }
+        res.set("Content-Type", "image/png");
+        res.set("Cache-Control", "public, max-age=86400");
+        res.send(png);
+      } catch (err) {
+        log.warn({ err, key }, "plot fetch failed");
+        res.status(500).json({ error: "plot fetch failed" });
+      }
+    });
+  }
 
   return app;
 }

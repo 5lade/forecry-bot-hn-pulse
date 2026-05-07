@@ -6,6 +6,8 @@ import type {
   StripePing,
   TelegramGetMe,
 } from "./health.js";
+import { decodePngHeader, encodePng, PNG_SIGNATURE } from "./jobs/png.js";
+import { InMemoryPlotStore } from "./jobs/plot-store.js";
 import { createApp, type CreateAppOptions } from "./server.js";
 
 function dbClient(handler: (text: string) => Promise<unknown>): HealthQueryClient {
@@ -182,6 +184,52 @@ describe("GET /healthz (deep readiness)", () => {
       expect(body.ok).toBe(false);
       expect(body.checks.stripe.status).toBe("down");
       expect(body.checks.stripe.reason).toMatch(/stripe down/);
+    });
+  });
+});
+
+describe("GET /plots/:key.png", () => {
+  it("serves a stored PNG that decodes correctly", async () => {
+    const plotStore = new InMemoryPlotStore();
+    const png = encodePng(
+      4,
+      2,
+      new Uint8Array([
+        0xff, 0x00, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0x00, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0xff, 0x00, 0xff, 0xff, 0xff,
+        0xff, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0xff,
+      ]),
+    );
+    await plotStore.put("weekly-calibration/2026-04-27/u-1", png);
+
+    await withServer({ ...okOpts, plotStore }, async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/plots/weekly-calibration/2026-04-27/u-1.png`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("image/png");
+      const body = Buffer.from(await res.arrayBuffer());
+      expect(body.subarray(0, 8).equals(PNG_SIGNATURE)).toBe(true);
+      const header = decodePngHeader(body);
+      expect(header.width).toBe(4);
+      expect(header.height).toBe(2);
+    });
+  });
+
+  it("returns 404 when the key is unknown", async () => {
+    const plotStore = new InMemoryPlotStore();
+    await withServer({ ...okOpts, plotStore }, async (port) => {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/plots/missing-key.png`,
+      );
+      expect(res.status).toBe(404);
+    });
+  });
+
+  it("does not mount the route when no plotStore is provided", async () => {
+    await withServer({ ...okOpts }, async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/plots/anything.png`);
+      expect(res.status).toBe(404);
     });
   });
 });

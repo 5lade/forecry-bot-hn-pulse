@@ -8,6 +8,8 @@ import { startCron } from "./cron.js";
 import { getPool } from "./db/client.js";
 import { countActiveWatches } from "./db/watches.js";
 import type { DigestTelegramSender } from "./jobs/daily-digest.js";
+import { InMemoryPlotStore } from "./jobs/plot-store.js";
+import type { WeeklyCalibrationTelegramSender } from "./jobs/weekly-calibration.js";
 import { logger, loggerErrorSink, loggerInfoSink, loggerWarnSink } from "./log.js";
 import { setActiveWatchesProvider } from "./metrics.js";
 import { startPoller } from "./poller/index.js";
@@ -43,6 +45,8 @@ async function main(): Promise<void> {
   };
   const stripePing = async (): Promise<unknown> => stripe.balance.retrieve();
 
+  const plotStore = new InMemoryPlotStore();
+
   startServer({
     stripeWebhook: {
       client: dbClient,
@@ -53,6 +57,7 @@ async function main(): Promise<void> {
     },
     telegramGetMe,
     stripePing,
+    plotStore,
   });
 
   if (process.env.NODE_ENV !== "test") {
@@ -86,6 +91,7 @@ async function main(): Promise<void> {
         await botHandle.bot.api.sendMessage(chatId, text);
       },
     };
+    const weeklyCalibrationTelegram: WeeklyCalibrationTelegramSender = telegram;
 
     startCron({
       digest: {
@@ -94,6 +100,14 @@ async function main(): Promise<void> {
         publicUrl: config.PUBLIC_URL,
         log: loggerInfoSink({ component: "digest" }),
         onError: loggerErrorSink({ component: "digest" }),
+      },
+      weeklyCalibration: {
+        client: dbClient,
+        telegram: weeklyCalibrationTelegram,
+        plotStore,
+        publicUrl: config.PUBLIC_URL,
+        log: loggerInfoSink({ component: "weekly-calibration" }),
+        onError: loggerErrorSink({ component: "weekly-calibration" }),
       },
       log: loggerInfoSink({ component: "cron" }),
       onError: loggerWarnSink({ component: "cron" }),

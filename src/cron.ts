@@ -4,10 +4,19 @@ import {
   type DailyDigestDeps,
   type DailyDigestResult,
 } from "./jobs/daily-digest.js";
+import {
+  runWeeklyCalibration,
+  WEEKLY_CAL_DAY_OF_WEEK,
+  WEEKLY_CAL_HOUR_UTC,
+  msUntilNextWeeklyUtc,
+  type WeeklyCalibrationDeps,
+  type WeeklyCalibrationResult,
+} from "./jobs/weekly-calibration.js";
 import { childLogger } from "./log.js";
 
 export interface CronDeps {
   digest?: DailyDigestDeps;
+  weeklyCalibration?: WeeklyCalibrationDeps;
   /** Override `Date.now`-style clock for tests. */
   now?: () => Date;
   /**
@@ -67,16 +76,25 @@ export function startCron(deps: CronDeps): CronHandle {
     });
 
   let stopped = false;
-  let activeHandle: unknown = null;
+  const handles = new Set<unknown>();
+
+  const trackHandle = (h: unknown): void => {
+    handles.add(h);
+  };
+  const releaseHandle = (h: unknown): void => {
+    handles.delete(h);
+  };
 
   const scheduleNextDigest = (): void => {
     if (stopped) return;
     if (!deps.digest) return;
     const delay = msUntilNextDailyUtc(now(), DIGEST_HOUR_UTC);
     log(`[cron] daily-digest scheduled in ${delay}ms`);
-    activeHandle = setTimeoutFn(() => {
+    const handle = setTimeoutFn(() => {
+      releaseHandle(handle);
       void fireDigest();
     }, delay);
+    trackHandle(handle);
   };
 
   const fireDigest = async (): Promise<void> => {
@@ -91,16 +109,45 @@ export function startCron(deps: CronDeps): CronHandle {
     }
   };
 
+  const scheduleNextWeeklyCalibration = (): void => {
+    if (stopped) return;
+    if (!deps.weeklyCalibration) return;
+    const delay = msUntilNextWeeklyUtc(
+      now(),
+      WEEKLY_CAL_DAY_OF_WEEK,
+      WEEKLY_CAL_HOUR_UTC,
+    );
+    log(`[cron] weekly-calibration scheduled in ${delay}ms`);
+    const handle = setTimeoutFn(() => {
+      releaseHandle(handle);
+      void fireWeeklyCalibration();
+    }, delay);
+    trackHandle(handle);
+  };
+
+  const fireWeeklyCalibration = async (): Promise<void> => {
+    if (stopped || !deps.weeklyCalibration) return;
+    try {
+      const result: WeeklyCalibrationResult = await runWeeklyCalibration(
+        deps.weeklyCalibration,
+      );
+      log(`[cron] weekly-calibration done: ${JSON.stringify(result)}`);
+    } catch (err) {
+      onError(err, "weekly-calibration");
+    } finally {
+      scheduleNextWeeklyCalibration();
+    }
+  };
+
   scheduleNextDigest();
+  scheduleNextWeeklyCalibration();
 
   return {
     stop(): void {
       if (stopped) return;
       stopped = true;
-      if (activeHandle != null) {
-        clearTimeoutFn(activeHandle);
-        activeHandle = null;
-      }
+      for (const h of handles) clearTimeoutFn(h);
+      handles.clear();
     },
   };
 }
