@@ -380,7 +380,7 @@ acceptance: |
   - Logs include level, time, msg, plus context fields (item_id where relevant)
 ```
 
-- [ ] hn-pulse-p2-002-retry-policy
+- [x] hn-pulse-p2-002-retry-policy
 
 ```task
 id: hn-pulse-p2-002-retry-policy
