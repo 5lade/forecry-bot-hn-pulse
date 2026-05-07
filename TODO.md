@@ -442,7 +442,7 @@ acceptance: |
   - All listed metrics are present after 1 minute of traffic
 ```
 
-- [ ] hn-pulse-p2-005-deep-health
+- [x] hn-pulse-p2-005-deep-health
 
 ```task
 id: hn-pulse-p2-005-deep-health
