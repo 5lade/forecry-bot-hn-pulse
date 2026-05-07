@@ -144,6 +144,7 @@ export interface ScoreAndInsertInput {
   title?: string | null;
   by?: string | null;
   author_karma?: number | null;
+  domain?: string | null;
   taken_at: Date;
   rank: number | null;
   score: number | null;
@@ -156,11 +157,41 @@ export interface ScoreAndInsertResult extends ScoreSnapshotResult {
   comment_velocity: number;
 }
 
+export interface SnapshotInsertedInfo {
+  itemId: number;
+  itemBy: string | null;
+  itemDomain: string | null;
+  pFrontPage6h: number;
+  deltaP5min: number;
+  isFirstSnapshot: boolean;
+}
+
+export type SnapshotInsertedHook = (
+  info: SnapshotInsertedInfo,
+) => Promise<void> | void;
+
+export interface ScoreAndInsertOptions {
+  weights?: BaselineWeights;
+  onSnapshotInserted?: SnapshotInsertedHook;
+}
+
+function isOptionsArg(
+  v: BaselineWeights | ScoreAndInsertOptions | undefined,
+): v is ScoreAndInsertOptions {
+  if (!v || typeof v !== "object") return false;
+  return "weights" in v || "onSnapshotInserted" in v;
+}
+
 export async function scoreAndInsertSnapshot(
   client: ItemsQueryClient,
   input: ScoreAndInsertInput,
-  weights?: BaselineWeights,
+  weightsOrOptions?: BaselineWeights | ScoreAndInsertOptions,
 ): Promise<ScoreAndInsertResult> {
+  const opts: ScoreAndInsertOptions = isOptionsArg(weightsOrOptions)
+    ? weightsOrOptions
+    : { weights: weightsOrOptions as BaselineWeights | undefined };
+  const weights = opts.weights;
+
   const previous: SnapshotLookupRow | null =
     await getMostRecentSnapshotBefore(client, input.item_id, input.taken_at);
 
@@ -209,6 +240,17 @@ export async function scoreAndInsertSnapshot(
     p_front_page_6h,
     delta_p_5min,
   });
+
+  if (opts.onSnapshotInserted) {
+    await opts.onSnapshotInserted({
+      itemId: input.item_id,
+      itemBy: input.by ?? null,
+      itemDomain: input.domain ?? null,
+      pFrontPage6h: p_front_page_6h,
+      deltaP5min: delta_p_5min,
+      isFirstSnapshot: previous == null,
+    });
+  }
 
   return {
     features,

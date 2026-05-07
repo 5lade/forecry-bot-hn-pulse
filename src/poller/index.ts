@@ -3,7 +3,10 @@ import {
   upsertItem,
   type ItemsQueryClient,
 } from "../db/items.js";
-import { scoreAndInsertSnapshot } from "../scorer/index.js";
+import {
+  scoreAndInsertSnapshot,
+  type SnapshotInsertedHook,
+} from "../scorer/index.js";
 import {
   diffNewIds,
   extractDomain,
@@ -51,6 +54,7 @@ export interface PollerStepDeps {
   hn?: HnClientOptions;
   now?: () => Date;
   log?: (msg: string) => void;
+  onSnapshotInserted?: SnapshotInsertedHook;
 }
 
 export interface NewStoriesStepDeps extends PollerStepDeps {
@@ -84,26 +88,32 @@ export async function pollNewStoriesStep(
       continue;
     }
     const itemNonNull = item as HnItem;
+    const itemDomain = extractDomain(itemNonNull.url);
     await upsertItem(deps.client, {
       id: itemNonNull.id,
       by: itemNonNull.by ?? null,
       title: itemNonNull.title ?? null,
       url: itemNonNull.url ?? null,
-      domain: extractDomain(itemNonNull.url),
+      domain: itemDomain,
       posted_at: postedAtOf(itemNonNull, now),
       first_seen_at: now,
     });
-    await scoreAndInsertSnapshot(deps.client, {
-      item_id: itemNonNull.id,
-      posted_at: postedAtOf(itemNonNull, now),
-      url: itemNonNull.url ?? null,
-      title: itemNonNull.title ?? null,
-      by: itemNonNull.by ?? null,
-      taken_at: now,
-      rank: null,
-      score: itemNonNull.score ?? null,
-      comments: itemNonNull.descendants ?? null,
-    });
+    await scoreAndInsertSnapshot(
+      deps.client,
+      {
+        item_id: itemNonNull.id,
+        posted_at: postedAtOf(itemNonNull, now),
+        url: itemNonNull.url ?? null,
+        title: itemNonNull.title ?? null,
+        by: itemNonNull.by ?? null,
+        domain: itemDomain,
+        taken_at: now,
+        rank: null,
+        score: itemNonNull.score ?? null,
+        comments: itemNonNull.descendants ?? null,
+      },
+      { onSnapshotInserted: deps.onSnapshotInserted },
+    );
     inserted += 1;
   }
 
@@ -137,17 +147,22 @@ export async function rescanStep(
   for (const row of slice) {
     const item = await fetchItem(row.id, deps.hn);
     if (!item) continue;
-    await scoreAndInsertSnapshot(deps.client, {
-      item_id: row.id,
-      posted_at: postedAtOf(item, now),
-      url: item.url ?? null,
-      title: item.title ?? null,
-      by: item.by ?? null,
-      taken_at: now,
-      rank: null,
-      score: item.score ?? null,
-      comments: item.descendants ?? null,
-    });
+    await scoreAndInsertSnapshot(
+      deps.client,
+      {
+        item_id: row.id,
+        posted_at: postedAtOf(item, now),
+        url: item.url ?? null,
+        title: item.title ?? null,
+        by: item.by ?? null,
+        domain: extractDomain(item.url),
+        taken_at: now,
+        rank: null,
+        score: item.score ?? null,
+        comments: item.descendants ?? null,
+      },
+      { onSnapshotInserted: deps.onSnapshotInserted },
+    );
     snapshots += 1;
   }
 
@@ -165,6 +180,7 @@ export interface PollerOptions {
   hnBaseUrl?: string;
   log?: (msg: string) => void;
   onError?: (err: unknown, label: string) => void;
+  onSnapshotInserted?: SnapshotInsertedHook;
 }
 
 export interface PollerHandle {
@@ -196,7 +212,13 @@ export function startPoller(opts: PollerOptions): PollerHandle {
 
   const runNewstories = async (): Promise<void> => {
     try {
-      activeNewstories = pollNewStoriesStep({ client: opts.client, seen, hn, log });
+      activeNewstories = pollNewStoriesStep({
+        client: opts.client,
+        seen,
+        hn,
+        log,
+        onSnapshotInserted: opts.onSnapshotInserted,
+      });
       await activeNewstories;
     } catch (err) {
       onError(err, "newstories");
@@ -212,6 +234,7 @@ export function startPoller(opts: PollerOptions): PollerHandle {
         hn,
         log,
         windowHours,
+        onSnapshotInserted: opts.onSnapshotInserted,
       });
       await activeRescan;
     } catch (err) {
