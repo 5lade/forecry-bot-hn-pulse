@@ -310,7 +310,7 @@ acceptance: |
   - Vitest uses Stripe's test fixtures for each event type
 ```
 
-- [ ] hn-pulse-p1-008-daily-digest
+- [x] hn-pulse-p1-008-daily-digest
 
 ```task
 id: hn-pulse-p1-008-daily-digest
