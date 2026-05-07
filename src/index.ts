@@ -1,11 +1,13 @@
 import { makeDispatcherHook } from "./alerts/dispatcher.js";
 import { InMemoryAlertSender } from "./alerts/sender.js";
+import { startBot } from "./bot/index.js";
+import { StubBillingClient } from "./bot/stripe.js";
 import { loadConfig, redactConfig } from "./config.js";
 import { getPool } from "./db/client.js";
 import { startPoller } from "./poller/index.js";
 import { startServer } from "./server.js";
 
-function main(): void {
+async function main(): Promise<void> {
   const config = loadConfig();
   const safe = redactConfig(config);
   process.stdout.write(`config loaded: ${JSON.stringify(safe)}\n`);
@@ -20,8 +22,6 @@ function main(): void {
         return { rows: r.rows as T[] };
       },
     };
-    // Real Telegram sender lands in p1-006; until then alerts dispatch into an
-    // in-memory stub so the alerts row still gets delivered_at populated.
     const dispatcherHook = makeDispatcherHook({
       client,
       sender: new InMemoryAlertSender(),
@@ -31,8 +31,27 @@ function main(): void {
       },
     });
     startPoller({ client, onSnapshotInserted: dispatcherHook });
+
+    // p1-007 will replace StubBillingClient with a real Stripe-backed
+    // implementation. Until then the bot hands users a placeholder URL.
+    const billing = new StubBillingClient(config.PUBLIC_URL);
+
+    await startBot({
+      token: config.TG_BOT_TOKEN,
+      deps: {
+        client,
+        billing,
+        publicUrl: config.PUBLIC_URL,
+        log: (msg) => process.stdout.write(`${msg}\n`),
+      },
+      log: (msg) => process.stdout.write(`${msg}\n`),
+    });
   }
   process.stdout.write("hn-pulse ready\n");
 }
 
-main();
+main().catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`[startup] fatal: ${msg}\n`);
+  process.exitCode = 1;
+});
