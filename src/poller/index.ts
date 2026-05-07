@@ -1,9 +1,9 @@
 import {
-  insertSnapshot,
   listItemsYoungerThan,
   upsertItem,
   type ItemsQueryClient,
 } from "../db/items.js";
+import { scoreAndInsertSnapshot } from "../scorer/index.js";
 import {
   diffNewIds,
   extractDomain,
@@ -93,8 +93,12 @@ export async function pollNewStoriesStep(
       posted_at: postedAtOf(itemNonNull, now),
       first_seen_at: now,
     });
-    await insertSnapshot(deps.client, {
+    await scoreAndInsertSnapshot(deps.client, {
       item_id: itemNonNull.id,
+      posted_at: postedAtOf(itemNonNull, now),
+      url: itemNonNull.url ?? null,
+      title: itemNonNull.title ?? null,
+      by: itemNonNull.by ?? null,
       taken_at: now,
       rank: null,
       score: itemNonNull.score ?? null,
@@ -133,8 +137,12 @@ export async function rescanStep(
   for (const row of slice) {
     const item = await fetchItem(row.id, deps.hn);
     if (!item) continue;
-    await insertSnapshot(deps.client, {
+    await scoreAndInsertSnapshot(deps.client, {
       item_id: row.id,
+      posted_at: postedAtOf(item, now),
+      url: item.url ?? null,
+      title: item.title ?? null,
+      by: item.by ?? null,
       taken_at: now,
       rank: null,
       score: item.score ?? null,

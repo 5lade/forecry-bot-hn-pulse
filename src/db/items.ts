@@ -32,6 +32,73 @@ export interface ItemRow {
   first_seen_at: Date;
 }
 
+export interface SnapshotLookupRow {
+  taken_at: Date;
+  score: number | null;
+  comments: number | null;
+  p_front_page_6h: number | null;
+}
+
+export async function getMostRecentSnapshotBefore(
+  client: ItemsQueryClient,
+  itemId: number,
+  beforeTs: Date,
+): Promise<SnapshotLookupRow | null> {
+  const res = await client.query<{
+    taken_at: Date | string;
+    score: number | null;
+    comments: number | null;
+    p_front_page_6h: number | string | null;
+  }>(
+    `SELECT taken_at, score, comments, p_front_page_6h
+       FROM item_snapshots
+      WHERE item_id = $1 AND taken_at < $2
+      ORDER BY taken_at DESC
+      LIMIT 1`,
+    [itemId, beforeTs],
+  );
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0]!;
+  return {
+    taken_at:
+      row.taken_at instanceof Date ? row.taken_at : new Date(row.taken_at),
+    score: row.score,
+    comments: row.comments,
+    p_front_page_6h:
+      row.p_front_page_6h == null ? null : Number(row.p_front_page_6h),
+  };
+}
+
+export async function getSnapshotAtOrBefore(
+  client: ItemsQueryClient,
+  itemId: number,
+  cutoffTs: Date,
+): Promise<SnapshotLookupRow | null> {
+  const res = await client.query<{
+    taken_at: Date | string;
+    score: number | null;
+    comments: number | null;
+    p_front_page_6h: number | string | null;
+  }>(
+    `SELECT taken_at, score, comments, p_front_page_6h
+       FROM item_snapshots
+      WHERE item_id = $1 AND taken_at <= $2
+      ORDER BY taken_at DESC
+      LIMIT 1`,
+    [itemId, cutoffTs],
+  );
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0]!;
+  return {
+    taken_at:
+      row.taken_at instanceof Date ? row.taken_at : new Date(row.taken_at),
+    score: row.score,
+    comments: row.comments,
+    p_front_page_6h:
+      row.p_front_page_6h == null ? null : Number(row.p_front_page_6h),
+  };
+}
+
 export async function upsertItem(
   client: ItemsQueryClient,
   item: UpsertItemInput,

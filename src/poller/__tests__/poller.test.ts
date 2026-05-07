@@ -126,8 +126,13 @@ describe("pollNewStoriesStep — new-item insert", () => {
       null, // rank
       5, // score
       1, // comments
-      null, // score_velocity
+      0, // score_velocity (no previous snapshot)
     ]);
+    // p_front_page_6h is param[7]; must be a finite number in [0,1].
+    const p = snap101?.params?.[7];
+    expect(typeof p).toBe("number");
+    expect(p as number).toBeGreaterThanOrEqual(0);
+    expect(p as number).toBeLessThanOrEqual(1);
 
     expect(seen.has(101)).toBe(true);
     expect(seen.has(102)).toBe(true);
