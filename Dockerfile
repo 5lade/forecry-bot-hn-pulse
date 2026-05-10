@@ -31,7 +31,7 @@ COPY --from=builder /bot/dist ./dist
 COPY db ./db
 COPY bin ./bin
 COPY entrypoint.sh ./entrypoint.sh
-RUN chmod +x ./entrypoint.sh ./bin/*.sh
+RUN sed -i 's/\r$//' ./entrypoint.sh ./bin/*.sh && chmod +x ./entrypoint.sh ./bin/*.sh
 
 ENTRYPOINT ["./entrypoint.sh"]
 CMD ["node", "dist/index.js"]

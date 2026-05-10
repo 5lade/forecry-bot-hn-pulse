@@ -27,6 +27,36 @@ describe("loadConfig", () => {
     expect(config).toEqual(VALID_ENV);
   });
 
+  it("allows Stripe and Telegram env to be omitted in soak mode", () => {
+    const config = loadConfig({
+      DATABASE_URL: VALID_ENV.DATABASE_URL,
+      PUBLIC_URL: VALID_ENV.PUBLIC_URL,
+      NODE_ENV: VALID_ENV.NODE_ENV,
+      LOG_LEVEL: VALID_ENV.LOG_LEVEL,
+      FORECRY_BOT_SOAK: "true",
+    });
+
+    expect(config).toMatchObject({
+      DATABASE_URL: VALID_ENV.DATABASE_URL,
+      TG_BOT_TOKEN: "",
+      STRIPE_SECRET_KEY: "",
+      STRIPE_WEBHOOK_SECRET: "",
+      PUBLIC_URL: VALID_ENV.PUBLIC_URL,
+      NODE_ENV: VALID_ENV.NODE_ENV,
+      LOG_LEVEL: VALID_ENV.LOG_LEVEL,
+    });
+  });
+
+  it("rejects live Stripe keys in soak mode", () => {
+    expect(() =>
+      loadConfig({
+        ...VALID_ENV,
+        STRIPE_SECRET_KEY: "sk_live_not_allowed",
+        FORECRY_BOT_MODE: "dry-run",
+      }),
+    ).toThrowError(/live Stripe keys are not allowed/);
+  });
+
   it("throws a ConfigError when called", () => {
     expect(() => loadConfig({})).toThrowError(ConfigError);
   });

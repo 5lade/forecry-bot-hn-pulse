@@ -1,6 +1,8 @@
 import pg from "pg";
+import { childLogger } from "../log.js";
 
 const { Pool } = pg;
+const log = childLogger({ component: "db" });
 
 export type DbPool = pg.Pool;
 export type DbClient = pg.PoolClient;
@@ -19,10 +21,14 @@ export function createPool(opts: CreatePoolOptions = {}): pg.Pool {
   if (!connectionString) {
     throw new Error("DATABASE_URL is not set");
   }
-  return new Pool({
+  const created = new Pool({
     connectionString,
     max: opts.max ?? 10,
   });
+  created.on("error", (err: Error) => {
+    log.warn({ err: { message: err.message, name: err.name } }, "idle database client error");
+  });
+  return created;
 }
 
 export function getPool(): pg.Pool {

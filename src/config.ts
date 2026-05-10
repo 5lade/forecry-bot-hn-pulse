@@ -38,6 +38,12 @@ export const ConfigSchema = z.object({
   }),
 });
 
+const SoakConfigSchema = ConfigSchema.extend({
+  TG_BOT_TOKEN: z.string().optional().default(""),
+  STRIPE_SECRET_KEY: z.string().optional().default(""),
+  STRIPE_WEBHOOK_SECRET: z.string().optional().default(""),
+});
+
 export type Config = z.infer<typeof ConfigSchema>;
 
 export class ConfigError extends Error {
@@ -45,6 +51,10 @@ export class ConfigError extends Error {
     super(message);
     this.name = "ConfigError";
   }
+}
+
+export function isSoakEnv(source: NodeJS.ProcessEnv = process.env): boolean {
+  return source.FORECRY_BOT_SOAK === "true" || source.FORECRY_BOT_MODE === "dry-run";
 }
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
@@ -56,8 +66,14 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     }
   }
 
-  const parsed = ConfigSchema.safeParse(candidate);
+  const soak = isSoakEnv(source);
+  const parsed = (soak ? SoakConfigSchema : ConfigSchema).safeParse(candidate);
   if (parsed.success) {
+    if (soak && parsed.data.STRIPE_SECRET_KEY.startsWith("sk_live_")) {
+      throw new ConfigError(
+        "Invalid environment configuration:\n  - STRIPE_SECRET_KEY: live Stripe keys are not allowed in soak/dry-run mode",
+      );
+    }
     return parsed.data;
   }
 
