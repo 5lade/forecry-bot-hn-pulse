@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ItemsQueryClient } from "../../db/items.js";
 import { type FetchResponseLike } from "../hn.js";
 import {
+  HN_NEWSTORIES_HEARTBEAT_SERVICE,
   _resetLastBatchAtForTest,
   getLastBatchAt,
   pollNewStoriesStep,
@@ -136,6 +137,19 @@ describe("pollNewStoriesStep — new-item insert", () => {
 
     expect(seen.has(101)).toBe(true);
     expect(seen.has(102)).toBe(true);
+    const heartbeat = calls.find((c) =>
+      /INSERT INTO service_heartbeats/i.test(c.text),
+    );
+    expect(heartbeat?.params).toEqual([
+      HN_NEWSTORIES_HEARTBEAT_SERVICE,
+      now,
+      JSON.stringify({
+        fresh_count: 3,
+        new_count: 2,
+        inserted: 2,
+        skipped: 0,
+      }),
+    ]);
     expect(getLastBatchAt()).toEqual(now);
   });
 
@@ -167,6 +181,42 @@ describe("pollNewStoriesStep — new-item insert", () => {
     expect(calls.filter((c) => /INSERT INTO items/i.test(c.text))).toHaveLength(
       0,
     );
+  });
+
+  it("records liveness heartbeat even when all fetched ids were already seen", async () => {
+    _resetLastBatchAtForTest();
+    const { client, calls } = makeClient([]);
+    const seen = new Set<number>([300, 301]);
+    const now = new Date("2025-01-02T00:05:00Z");
+
+    const fetchImpl = async (url: string) => {
+      if (url.endsWith("/newstories.json")) return jsonResponse([300, 301]);
+      return jsonResponse(null, 404);
+    };
+
+    const result = await pollNewStoriesStep({
+      client,
+      seen,
+      hn: { fetchImpl, backoff: { sleep: () => Promise.resolve() } },
+      now: () => now,
+    });
+
+    expect(result).toEqual({ newIds: [], inserted: 0, skipped: 0 });
+    expect(calls.some((c) => /INSERT INTO items/i.test(c.text))).toBe(false);
+    const heartbeat = calls.find((c) =>
+      /INSERT INTO service_heartbeats/i.test(c.text),
+    );
+    expect(heartbeat?.params).toEqual([
+      HN_NEWSTORIES_HEARTBEAT_SERVICE,
+      now,
+      JSON.stringify({
+        fresh_count: 2,
+        new_count: 0,
+        inserted: 0,
+        skipped: 0,
+      }),
+    ]);
+    expect(getLastBatchAt()).toEqual(now);
   });
 });
 

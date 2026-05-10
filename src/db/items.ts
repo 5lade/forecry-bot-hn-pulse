@@ -32,6 +32,12 @@ export interface ItemRow {
   first_seen_at: Date;
 }
 
+export interface ServiceHeartbeatInput {
+  service: string;
+  checked_at: Date;
+  meta?: Record<string, unknown>;
+}
+
 export interface SnapshotLookupRow {
   taken_at: Date;
   score: number | null;
@@ -123,6 +129,24 @@ export async function upsertItem(
   );
 }
 
+export async function recordServiceHeartbeat(
+  client: ItemsQueryClient,
+  heartbeat: ServiceHeartbeatInput,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO service_heartbeats (service, checked_at, meta)
+     VALUES ($1, $2, $3::jsonb)
+     ON CONFLICT (service) DO UPDATE SET
+       checked_at = EXCLUDED.checked_at,
+       meta = EXCLUDED.meta`,
+    [
+      heartbeat.service,
+      heartbeat.checked_at,
+      JSON.stringify(heartbeat.meta ?? {}),
+    ],
+  );
+}
+
 export async function insertSnapshot(
   client: ItemsQueryClient,
   snap: InsertSnapshotInput,
@@ -154,7 +178,8 @@ export async function listItemsYoungerThan(
   const res = await client.query<{ id: number; first_seen_at: Date | string }>(
     `SELECT id, first_seen_at
        FROM items
-      WHERE first_seen_at > NOW() - (INTERVAL '1 hour' * $1)`,
+      WHERE first_seen_at > NOW() - (INTERVAL '1 hour' * $1)
+      ORDER BY first_seen_at DESC, id DESC`,
     [hours],
   );
   return res.rows.map((r) => ({

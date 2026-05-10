@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   insertSnapshot,
   listItemsYoungerThan,
+  recordServiceHeartbeat,
   upsertItem,
   type ItemsQueryClient,
 } from "../items.js";
@@ -83,6 +84,28 @@ describe("insertSnapshot", () => {
       comments: null,
     });
     expect(calls[0].text).toMatch(/ON CONFLICT \(item_id, taken_at\) DO NOTHING/i);
+  });
+});
+
+describe("recordServiceHeartbeat", () => {
+  it("upserts service heartbeat metadata", async () => {
+    const { client, calls } = recordingClient();
+    const checkedAt = new Date("2025-01-01T00:02:00Z");
+
+    await recordServiceHeartbeat(client, {
+      service: "hn_newstories_poller",
+      checked_at: checkedAt,
+      meta: { fresh_count: 500, new_count: 0 },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].text).toMatch(/INSERT INTO service_heartbeats/i);
+    expect(calls[0].text).toMatch(/ON CONFLICT \(service\) DO UPDATE/i);
+    expect(calls[0].params).toEqual([
+      "hn_newstories_poller",
+      checkedAt,
+      JSON.stringify({ fresh_count: 500, new_count: 0 }),
+    ]);
   });
 });
 

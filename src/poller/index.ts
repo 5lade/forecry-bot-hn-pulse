@@ -1,5 +1,6 @@
 import {
   listItemsYoungerThan,
+  recordServiceHeartbeat,
   upsertItem,
   type ItemsQueryClient,
 } from "../db/items.js";
@@ -21,7 +22,10 @@ import {
 
 export const NEWSTORIES_INTERVAL_MS = 30_000;
 export const RESCAN_INTERVAL_MS = 60_000;
+export const RESCAN_CONCURRENCY = 25;
+export const RESCAN_MAX_ITEMS = 2_000;
 export const RESCAN_WINDOW_HOURS = 6;
+export const HN_NEWSTORIES_HEARTBEAT_SERVICE = "hn_newstories_poller";
 
 let _lastBatchAt: Date | null = null;
 
@@ -121,6 +125,16 @@ export async function pollNewStoriesStep(
     inserted += 1;
   }
 
+  await recordServiceHeartbeat(deps.client, {
+    service: HN_NEWSTORIES_HEARTBEAT_SERVICE,
+    checked_at: now,
+    meta: {
+      fresh_count: fresh.length,
+      new_count: newIds.length,
+      inserted,
+      skipped,
+    },
+  });
   setLastBatch(now);
   log(`[poller] newstories: fresh=${fresh.length} new=${newIds.length} inserted=${inserted} skipped=${skipped}`);
   return { newIds, inserted, skipped };
@@ -129,11 +143,30 @@ export async function pollNewStoriesStep(
 export interface RescanStepDeps extends PollerStepDeps {
   windowHours?: number;
   maxItemsPerTick?: number;
+  concurrency?: number;
 }
 
 export interface RescanStepResult {
   scanned: number;
   snapshots: number;
+}
+
+async function forEachConcurrent<T>(
+  items: ReadonlyArray<T>,
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.max(1, Math.min(concurrency, items.length)) },
+    async () => {
+      while (next < items.length) {
+        const item = items[next++]!;
+        await fn(item);
+      }
+    },
+  );
+  await Promise.all(workers);
 }
 
 export async function rescanStep(
@@ -142,16 +175,17 @@ export async function rescanStep(
   const now = (deps.now ?? (() => new Date()))();
   const log = deps.log ?? (() => {});
   const windowHours = deps.windowHours ?? RESCAN_WINDOW_HOURS;
-  const maxItems = deps.maxItemsPerTick ?? 500;
+  const maxItems = deps.maxItemsPerTick ?? RESCAN_MAX_ITEMS;
+  const concurrency = deps.concurrency ?? RESCAN_CONCURRENCY;
 
   const tracked = await listItemsYoungerThan(deps.client, windowHours);
   const slice = tracked.slice(0, maxItems);
 
   let snapshots = 0;
-  for (const row of slice) {
+  await forEachConcurrent(slice, concurrency, async (row) => {
     const item = await fetchItem(row.id, deps.hn);
     hnItemsSeenTotal.inc();
-    if (!item) continue;
+    if (!item) return;
     await scoreAndInsertSnapshot(
       deps.client,
       {
@@ -169,7 +203,7 @@ export async function rescanStep(
       { onSnapshotInserted: deps.onSnapshotInserted },
     );
     snapshots += 1;
-  }
+  });
 
   setLastBatch(now);
   log(`[poller] rescan: tracked=${tracked.length} snapshots=${snapshots}`);

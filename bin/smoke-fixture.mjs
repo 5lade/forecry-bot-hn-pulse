@@ -64,6 +64,11 @@ async function seedUser(db) {
 // snapshot in the last 60s, no NULL probabilities, synthetic alerts with
 // fast latency, and a 7-day calibration history with Brier ~0.05.
 async function seedHealthy(db, userId) {
+  await db.query(
+    `INSERT INTO service_heartbeats (service, checked_at, meta)
+     VALUES ('hn_newstories_poller', NOW() - INTERVAL '30 seconds', '{"fresh_count": 500, "new_count": 0}'::jsonb);`
+  );
+
   // Criterion 1+2+3: tracked items with fresh snapshots
   for (let i = 1; i <= 20; i++) {
     await db.query(
@@ -111,18 +116,38 @@ async function seedHealthy(db, userId) {
       [i, p]
     );
   }
+
+  // PGlite can be slow in constrained CI/local Docker. Reseat the liveness
+  // and freshness timestamps after all fixture rows are loaded so unrelated
+  // seed duration does not trip the sub-90s/sub-300s acceptance probes.
+  await db.query(
+    `UPDATE service_heartbeats
+        SET checked_at = NOW() - INTERVAL '30 seconds'
+      WHERE service = 'hn_newstories_poller';`
+  );
+  await db.query(
+    `UPDATE items
+        SET posted_at = NOW() - INTERVAL '30 seconds',
+            first_seen_at = NOW() - INTERVAL '30 seconds'
+      WHERE id BETWEEN 1 AND 20;`
+  );
+  await db.query(
+    `UPDATE item_snapshots
+        SET taken_at = NOW() - INTERVAL '30 seconds'
+      WHERE item_id BETWEEN 1 AND 20;`
+  );
 }
 
 // --- breakers: each one breaks exactly one criterion ---
 
 async function breakCriterion1(db) {
-  // Poller dead: shift every items.first_seen_at backwards so MAX(first_seen_at)
-  // is older than 300s. Snapshots stay fresh (so criterion 2 passes) and
-  // alerts/calibration history is untouched.
+  // Poller dead: move the newstories heartbeat outside the liveness window.
+  // Snapshots stay fresh (so criterion 2 passes) and alerts/calibration
+  // history is untouched.
   await db.query(
-    `UPDATE items
-        SET first_seen_at = first_seen_at - INTERVAL '600 seconds',
-            posted_at     = posted_at     - INTERVAL '600 seconds';`
+    `UPDATE service_heartbeats
+        SET checked_at = NOW() - INTERVAL '600 seconds'
+      WHERE service = 'hn_newstories_poller';`
   );
 }
 
@@ -194,7 +219,7 @@ async function runProbes(db) {
   const results = [];
 
   // Criterion 1
-  console.log('[criterion-1] Poller liveness (most recent first_seen_at <300s old)');
+  console.log('[criterion-1] Poller liveness (successful newstories heartbeat <300s old)');
   const lag = await scalar(db, 'SELECT lag_seconds FROM v_poller_lag;');
   if (lag !== null && num(lag) < 300) {
     console.log(`  PASS (lag=${lag}s)`); pass++; results.push('PASS');
