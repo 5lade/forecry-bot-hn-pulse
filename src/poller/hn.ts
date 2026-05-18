@@ -44,22 +44,36 @@ const defaultFetch: FetchLike = async (url) => {
   };
 };
 
-export async function fetchNewStoryIds(
+async function fetchStoryIdsEndpoint(
+  endpoint: "newstories" | "topstories",
   opts: HnClientOptions = {},
 ): Promise<number[]> {
   const fetchImpl = opts.fetchImpl ?? defaultFetch;
   const baseUrl = opts.baseUrl ?? HN_BASE_URL;
   return retry(async () => {
-    const res = await fetchImpl(`${baseUrl}/newstories.json`);
+    const path = `${endpoint}.json`;
+    const res = await fetchImpl(`${baseUrl}/${path}`);
     if (!res.ok) {
-      throw new HttpError(res.status, `newstories.json HTTP ${res.status}`);
+      throw new HttpError(res.status, `${path} HTTP ${res.status}`);
     }
     const body = await res.json();
     if (!Array.isArray(body)) {
-      throw new Error("newstories.json: expected array");
+      throw new Error(`${path}: expected array`);
     }
     return body.filter((x): x is number => typeof x === "number");
   }, opts.backoff);
+}
+
+export async function fetchNewStoryIds(
+  opts: HnClientOptions = {},
+): Promise<number[]> {
+  return fetchStoryIdsEndpoint("newstories", opts);
+}
+
+export async function fetchTopStoryIds(
+  opts: HnClientOptions = {},
+): Promise<number[]> {
+  return fetchStoryIdsEndpoint("topstories", opts);
 }
 
 export async function fetchItem(

@@ -1,6 +1,8 @@
 import {
   listItemsYoungerThan,
+  markReachedFrontPage,
   recordServiceHeartbeat,
+  resolveFrontPageMisses,
   upsertItem,
   type ItemsQueryClient,
 } from "../db/items.js";
@@ -15,6 +17,7 @@ import {
   extractDomain,
   fetchItem,
   fetchNewStoryIds,
+  fetchTopStoryIds,
   type FetchLike,
   type HnClientOptions,
   type HnItem,
@@ -25,6 +28,7 @@ export const RESCAN_INTERVAL_MS = 60_000;
 export const RESCAN_CONCURRENCY = 25;
 export const RESCAN_MAX_ITEMS = 2_000;
 export const RESCAN_WINDOW_HOURS = 6;
+export const FRONT_PAGE_RANK_LIMIT = 30;
 export const HN_NEWSTORIES_HEARTBEAT_SERVICE = "hn_newstories_poller";
 
 let _lastBatchAt: Date | null = null;
@@ -151,6 +155,27 @@ export interface RescanStepResult {
   snapshots: number;
 }
 
+function rankMap(ids: ReadonlyArray<number>, limit = FRONT_PAGE_RANK_LIMIT): Map<number, number> {
+  const ranks = new Map<number, number>();
+  for (const [idx, id] of ids.slice(0, limit).entries()) {
+    if (!ranks.has(id)) ranks.set(id, idx + 1);
+  }
+  return ranks;
+}
+
+async function loadFrontPageRanks(
+  hn: HnClientOptions | undefined,
+  log: (msg: string) => void,
+): Promise<Map<number, number> | null> {
+  try {
+    return rankMap(await fetchTopStoryIds(hn));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`[poller] topstories unavailable; recording snapshots without rank: ${msg}`);
+    return null;
+  }
+}
+
 async function forEachConcurrent<T>(
   items: ReadonlyArray<T>,
   concurrency: number,
@@ -180,12 +205,19 @@ export async function rescanStep(
 
   const tracked = await listItemsYoungerThan(deps.client, windowHours);
   const slice = tracked.slice(0, maxItems);
+  const frontPageRanks = await loadFrontPageRanks(deps.hn, log);
 
   let snapshots = 0;
+  let frontPageHits = 0;
   await forEachConcurrent(slice, concurrency, async (row) => {
     const item = await fetchItem(row.id, deps.hn);
     hnItemsSeenTotal.inc();
     if (!item) return;
+    const rank = frontPageRanks?.get(row.id) ?? null;
+    if (rank != null) {
+      await markReachedFrontPage(deps.client, { itemId: row.id, reachedAt: now });
+      frontPageHits += 1;
+    }
     await scoreAndInsertSnapshot(
       deps.client,
       {
@@ -196,7 +228,7 @@ export async function rescanStep(
         by: item.by ?? null,
         domain: extractDomain(item.url),
         taken_at: now,
-        rank: null,
+        rank,
         score: item.score ?? null,
         comments: item.descendants ?? null,
       },
@@ -205,8 +237,15 @@ export async function rescanStep(
     snapshots += 1;
   });
 
+  const resolvedMisses = frontPageRanks
+    ? await resolveFrontPageMisses(
+        deps.client,
+        new Date(now.getTime() - windowHours * 60 * 60 * 1000),
+      )
+    : 0;
+
   setLastBatch(now);
-  log(`[poller] rescan: tracked=${tracked.length} snapshots=${snapshots}`);
+  log(`[poller] rescan: tracked=${tracked.length} snapshots=${snapshots} front_page_hits=${frontPageHits} resolved_misses=${resolvedMisses}`);
   return { scanned: slice.length, snapshots };
 }
 

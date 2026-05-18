@@ -4,6 +4,7 @@ import {
   extractDomain,
   fetchItem,
   fetchNewStoryIds,
+  fetchTopStoryIds,
   HttpError,
   withBackoff,
   type FetchResponseLike,
@@ -139,6 +140,26 @@ describe("fetchNewStoryIds", () => {
     });
     expect(ids).toEqual([1, 2]);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("fetchTopStoryIds", () => {
+  it("returns numeric ids from topstories", async () => {
+    const ids = await fetchTopStoryIds({
+      fetchImpl: async () => jsonResponse([10, "x", 20, null, 30]),
+      backoff: { sleep: () => Promise.resolve() },
+    });
+    expect(ids).toEqual([10, 20, 30]);
+  });
+
+  it("uses the topstories endpoint", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse([1]));
+    await fetchTopStoryIds({
+      fetchImpl,
+      baseUrl: "https://hn.test/v0",
+      backoff: { sleep: () => Promise.resolve() },
+    });
+    expect(fetchImpl).toHaveBeenCalledWith("https://hn.test/v0/topstories.json");
   });
 });
 

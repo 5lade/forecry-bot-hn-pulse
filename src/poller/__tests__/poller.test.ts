@@ -256,4 +256,53 @@ describe("rescanStep", () => {
     expect(snapshots).toHaveLength(2);
     expect(getLastBatchAt()).toEqual(now);
   });
+
+  it("records top-30 ranks and marks items that reached the front page", async () => {
+    _resetLastBatchAtForTest();
+    const now = new Date("2025-01-03T00:10:00Z");
+    const { client, calls } = makeClient([
+      {
+        match: /SELECT id, first_seen_at\s+FROM items/i,
+        rows: [
+          { id: 11, first_seen_at: new Date(now.getTime() - 60_000) },
+          { id: 12, first_seen_at: new Date(now.getTime() - 120_000) },
+        ],
+      },
+    ]);
+
+    const fetchImpl = async (url: string) => {
+      if (url.endsWith("/topstories.json")) return jsonResponse([99, 11, 12]);
+      const m = url.match(/\/item\/(\d+)\.json$/);
+      if (!m) return jsonResponse(null, 404);
+      const id = Number(m[1]);
+      return jsonResponse({ id, score: id, descendants: id * 2, type: "story" });
+    };
+
+    const result = await rescanStep({
+      client,
+      hn: { fetchImpl, backoff: { sleep: () => Promise.resolve() } },
+      now: () => now,
+      windowHours: 6,
+      concurrency: 1,
+    });
+
+    expect(result).toEqual({ scanned: 2, snapshots: 2 });
+
+    const markReached = calls.filter((c) => /SET reached_front_page = TRUE/i.test(c.text));
+    expect(markReached.map((c) => c.params)).toEqual([
+      [11, now],
+      [12, now],
+    ]);
+
+    const snapshots = calls.filter((c) =>
+      /INSERT INTO item_snapshots/i.test(c.text),
+    );
+    expect(snapshots.find((c) => c.params?.[0] === 11)?.params?.[2]).toBe(2);
+    expect(snapshots.find((c) => c.params?.[0] === 12)?.params?.[2]).toBe(3);
+
+    const resolvedMisses = calls.find((c) => /SET reached_front_page = FALSE/i.test(c.text));
+    expect(resolvedMisses?.params).toEqual([
+      new Date(now.getTime() - 6 * 60 * 60 * 1000),
+    ]);
+  });
 });

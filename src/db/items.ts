@@ -38,6 +38,11 @@ export interface ServiceHeartbeatInput {
   meta?: Record<string, unknown>;
 }
 
+export interface MarkReachedFrontPageInput {
+  itemId: number;
+  reachedAt: Date;
+}
+
 export interface SnapshotLookupRow {
   taken_at: Date;
   score: number | null;
@@ -127,6 +132,35 @@ export async function upsertItem(
       item.first_seen_at,
     ],
   );
+}
+
+export async function markReachedFrontPage(
+  client: ItemsQueryClient,
+  input: MarkReachedFrontPageInput,
+): Promise<void> {
+  await client.query(
+    `UPDATE items
+        SET reached_front_page = TRUE,
+            reached_front_page_at = COALESCE(reached_front_page_at, $2)
+      WHERE id = $1
+        AND reached_front_page IS DISTINCT FROM TRUE`,
+    [input.itemId, input.reachedAt],
+  );
+}
+
+export async function resolveFrontPageMisses(
+  client: ItemsQueryClient,
+  cutoff: Date,
+): Promise<number> {
+  const res = await client.query<{ id: number }>(
+    `UPDATE items
+        SET reached_front_page = FALSE
+      WHERE reached_front_page IS NULL
+        AND first_seen_at <= $1
+      RETURNING id`,
+    [cutoff],
+  );
+  return res.rows.length;
 }
 
 export async function recordServiceHeartbeat(

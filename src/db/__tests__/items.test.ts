@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   insertSnapshot,
   listItemsYoungerThan,
+  markReachedFrontPage,
   recordServiceHeartbeat,
+  resolveFrontPageMisses,
   upsertItem,
   type ItemsQueryClient,
 } from "../items.js";
@@ -126,5 +128,31 @@ describe("listItemsYoungerThan", () => {
     ]);
     const rows = await listItemsYoungerThan(client, 1);
     expect(rows[0].first_seen_at).toBeInstanceOf(Date);
+  });
+});
+
+describe("front-page outcome helpers", () => {
+  it("marks the first front-page sighting timestamp", async () => {
+    const { client, calls } = recordingClient();
+    const reachedAt = new Date("2025-01-01T00:03:00Z");
+
+    await markReachedFrontPage(client, { itemId: 42, reachedAt });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].text).toMatch(/SET reached_front_page = TRUE/i);
+    expect(calls[0].text).toMatch(/COALESCE\(reached_front_page_at, \$2\)/i);
+    expect(calls[0].params).toEqual([42, reachedAt]);
+  });
+
+  it("resolves old unresolved items as front-page misses", async () => {
+    const cutoff = new Date("2025-01-01T06:00:00Z");
+    const { client, calls } = recordingClient([{ id: 1 }, { id: 2 }]);
+
+    const resolved = await resolveFrontPageMisses(client, cutoff);
+
+    expect(resolved).toBe(2);
+    expect(calls[0].text).toMatch(/SET reached_front_page = FALSE/i);
+    expect(calls[0].text).toMatch(/first_seen_at <= \$1/i);
+    expect(calls[0].params).toEqual([cutoff]);
   });
 });
