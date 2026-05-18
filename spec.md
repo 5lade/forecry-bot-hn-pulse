@@ -229,3 +229,5 @@ These are the measurable thresholds `bin/test-completion.sh` checks daily:
 - Canonical bot repository artifacts are `spec.md`, `brand.json`, and `PRODUCT.md`. Legacy `Spec.md` has been normalized to lowercase `spec.md`.
 
 - The runtime image includes Bash because `bin/test-completion.sh` is an executable soak acceptance script with a Bash shebang.
+
+- Synthetic alert latency acceptance requires at least one synthetic alert fixture in the prior 24h; an idle soak with no fixture is blocked/unknown, not failed delivery.

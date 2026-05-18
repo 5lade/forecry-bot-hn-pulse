@@ -111,11 +111,16 @@ echo "[criterion-4] Alert latency (p95 round-trip <120s in last 24h)"
 if ! has_telegram_delivery; then
   blocked "Telegram delivery disabled or token missing in degraded soak"
 else
-  P95=$(run_psql "SELECT p95_seconds FROM v_alert_latency;")
-  if [ -n "${P95}" ] && awk -v v="${P95}" 'BEGIN{exit !(v < 120)}'; then
-    pass "p95=${P95}s"
+  SYNTHETIC_ALERTS=$(run_psql "SELECT COUNT(*) FROM alerts WHERE matched_at > NOW() - INTERVAL '24 hours' AND alert_type = 'synthetic';")
+  if [ "${SYNTHETIC_ALERTS:-0}" = "0" ]; then
+    blocked "no synthetic alert fixture in last 24h; latency probe cannot distinguish idle from delayed delivery"
   else
-    fail "p95=${P95:-NULL}s"
+    P95=$(run_psql "SELECT p95_seconds FROM v_alert_latency;")
+    if [ -n "${P95}" ] && awk -v v="${P95}" 'BEGIN{exit !(v < 120)}'; then
+      pass "p95=${P95}s"
+    else
+      fail "p95=${P95:-NULL}s"
+    fi
   fi
 fi
 
