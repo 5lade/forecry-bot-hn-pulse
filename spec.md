@@ -227,3 +227,5 @@ These are the measurable thresholds `bin/test-completion.sh` checks daily:
 - The alert dispatcher delivers threshold/acceleration/submission alerts through Telegram using persisted `users.telegram_user_id` mappings. Tests use fake senders only; production uses `TelegramAlertSender`.
 - The poller tracks Hacker News top/front-page ranks by fetching `/topstories`, writing top-30 `item_snapshots.rank`, and marking `items.reached_front_page` / `reached_front_page_at` for outcome calibration.
 - Canonical bot repository artifacts are `spec.md`, `brand.json`, and `PRODUCT.md`. Legacy `Spec.md` has been normalized to lowercase `spec.md`.
+
+- The runtime image includes Bash because `bin/test-completion.sh` is an executable soak acceptance script with a Bash shebang.

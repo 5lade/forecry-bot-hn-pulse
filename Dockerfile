@@ -21,7 +21,7 @@ RUN npm ci --omit=dev
 FROM node:22-alpine AS runtime
 WORKDIR /bot
 
-RUN apk add --no-cache postgresql-client ca-certificates curl
+RUN apk add --no-cache postgresql-client ca-certificates curl bash
 
 ENV NODE_ENV=production
 
