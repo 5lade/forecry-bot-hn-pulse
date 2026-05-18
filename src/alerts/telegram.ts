@@ -17,6 +17,62 @@ export interface TelegramApi {
   sendMessage(chatId: number | string, text: string): Promise<unknown>;
 }
 
+interface TelegramUserRow extends Record<string, unknown> {
+  telegram_user_id: number | string | null;
+}
+
+export async function resolveTelegramChatId(
+  client: ItemsQueryClient,
+  userId: string,
+): Promise<number | string | null> {
+  const res = await client.query<TelegramUserRow>(
+    `SELECT telegram_user_id
+       FROM users
+      WHERE id = $1
+      LIMIT 1`,
+    [userId],
+  );
+  const chatId = res.rows[0]?.telegram_user_id;
+  if (chatId == null) return null;
+  if (typeof chatId === "number") return chatId;
+  const numeric = Number(chatId);
+  return Number.isSafeInteger(numeric) ? numeric : chatId;
+}
+
+function pct(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+export function formatTelegramAlertMessage(env: AlertEnvelope): string {
+  const p = env.payload;
+  const hnUrl = `https://news.ycombinator.com/item?id=${env.item_id}`;
+  const watch = `${p.watch_type}:${p.watch_value}`;
+
+  switch (env.alert_type) {
+    case "threshold":
+      return [
+        `HN Pulse: ${pct(p.p_front_page_6h)} front-page probability`,
+        `Watch ${watch} crossed your ${p.threshold_pct}% threshold.`,
+        `Item: ${hnUrl}`,
+        "Next step: check title clarity and early comments while momentum is fresh.",
+      ].join("\n");
+    case "acceleration":
+      return [
+        `HN Pulse: momentum spike (${pct(p.delta_p_5min)} in 5 min)`,
+        `Watch ${watch} is accelerating; current front-page probability is ${pct(p.p_front_page_6h)}.`,
+        `Item: ${hnUrl}`,
+        "Next step: engage quickly if comments are shaping the narrative.",
+      ].join("\n");
+    case "submitted":
+      return [
+        "HN Pulse: watched submitter posted a new item",
+        `Watch ${watch} matched item ${env.item_id}.`,
+        `Initial front-page probability: ${pct(p.p_front_page_6h)}.`,
+        `Item: ${hnUrl}`,
+      ].join("\n");
+  }
+}
+
 const TELEGRAM_DEFAULT_RETRY: RetryOptions = {
   maxAttempts: 3,
   baseMs: 500,

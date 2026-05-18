@@ -3,7 +3,11 @@ import type { ItemsQueryClient } from "../db/items.js";
 import { TokenBucketRateLimiter } from "../util/rate-limit.js";
 import { RetryAfterError } from "../util/retry.js";
 import type { AlertEnvelope } from "./sender.js";
-import { TelegramAlertSender } from "./telegram.js";
+import {
+  TelegramAlertSender,
+  formatTelegramAlertMessage,
+  resolveTelegramChatId,
+} from "./telegram.js";
 
 interface QueryCall {
   text: string;
@@ -66,6 +70,46 @@ function envelope(overrides: Partial<AlertEnvelope> = {}): AlertEnvelope {
     ...overrides,
   };
 }
+
+describe("Telegram alert helpers", () => {
+  it("resolves an internal user id to users.telegram_user_id", async () => {
+    const calls: QueryCall[] = [];
+    const client: ItemsQueryClient = {
+      async query<T extends Record<string, unknown>>(
+        text: string,
+        params?: ReadonlyArray<unknown>,
+      ): Promise<{ rows: T[] }> {
+        calls.push({ text, params });
+        return {
+          rows: [{ telegram_user_id: "123456" }] as unknown as T[],
+        };
+      },
+    };
+
+    await expect(resolveTelegramChatId(client, "u-1")).resolves.toBe(123456);
+    expect(calls[0]!.text).toMatch(/FROM users/);
+    expect(calls[0]!.params).toEqual(["u-1"]);
+  });
+
+  it("formats a Telegram alert with the HN item link and watch context", () => {
+    const text = formatTelegramAlertMessage(
+      envelope({
+        item_id: 123,
+        payload: {
+          watch_type: "domain",
+          watch_value: "example.com",
+          p_front_page_6h: 0.765,
+          delta_p_5min: 0.04,
+          threshold_pct: 70,
+        },
+      }),
+    );
+
+    expect(text).toContain("77% front-page probability");
+    expect(text).toContain("domain:example.com");
+    expect(text).toContain("https://news.ycombinator.com/item?id=123");
+  });
+});
 
 describe("TelegramAlertSender — happy path", () => {
   it("sends successfully on the first try and writes no deadletter", async () => {

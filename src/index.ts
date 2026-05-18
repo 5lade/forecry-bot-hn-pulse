@@ -1,5 +1,10 @@
 import { makeDispatcherHook } from "./alerts/dispatcher.js";
 import { InMemoryAlertSender } from "./alerts/sender.js";
+import {
+  TelegramAlertSender,
+  formatTelegramAlertMessage,
+  resolveTelegramChatId,
+} from "./alerts/telegram.js";
 import { makeStripe, StripeBillingClient } from "./billing/checkout.js";
 import { startBot } from "./bot/index.js";
 import { StubBillingClient, type BillingClient } from "./bot/stripe.js";
@@ -14,6 +19,7 @@ import { logger, loggerErrorSink, loggerInfoSink, loggerWarnSink } from "./log.j
 import { setActiveWatchesProvider } from "./metrics.js";
 import { startPoller } from "./poller/index.js";
 import { startServer } from "./server.js";
+import { TokenBucketRateLimiter } from "./util/rate-limit.js";
 
 function isPlaceholder(value: string): boolean {
   const trimmed = value.trim();
@@ -107,38 +113,31 @@ async function main(): Promise<void> {
   });
 
   if (process.env.NODE_ENV !== "test") {
-    const dispatcherHook = makeDispatcherHook({
-      client: dbClient,
-      sender: new InMemoryAlertSender(),
-      log: loggerInfoSink({ component: "alerts" }),
-      onError: loggerErrorSink({ component: "alerts" }),
-    });
-    startPoller({ client: dbClient, onSnapshotInserted: dispatcherHook });
-
     // Use the real Stripe-backed billing client when a price id is wired,
     // otherwise fall back to the stub so dev/test envs without Stripe work.
     const billing: BillingClient = stripe && pulsePriceId
       ? new StripeBillingClient({ stripe, pulsePriceId })
       : new StubBillingClient(config.PUBLIC_URL);
 
-    const telegram: DigestTelegramSender = telegramEnabled
-      ? await (async () => {
-          const botHandle = await startBot({
-            token: config.TG_BOT_TOKEN,
-            deps: {
-              client: dbClient,
-              billing,
-              publicUrl: config.PUBLIC_URL,
-              log: loggerInfoSink({ component: "bot" }),
-            },
+    const botHandle = telegramEnabled
+      ? await startBot({
+          token: config.TG_BOT_TOKEN,
+          deps: {
+            client: dbClient,
+            billing,
+            publicUrl: config.PUBLIC_URL,
             log: loggerInfoSink({ component: "bot" }),
-          });
-          return {
-            async sendMessage(chatId, text): Promise<void> {
-              await botHandle.bot.api.sendMessage(chatId, text);
-            },
-          };
-        })()
+          },
+          log: loggerInfoSink({ component: "bot" }),
+        })
+      : null;
+
+    const telegram: DigestTelegramSender = botHandle
+      ? {
+          async sendMessage(chatId, text): Promise<void> {
+            await botHandle.bot.api.sendMessage(chatId, text);
+          },
+        }
       : {
           async sendMessage(): Promise<void> {
             logger.warn(
@@ -146,6 +145,27 @@ async function main(): Promise<void> {
             );
           },
         };
+
+    const alertSender = botHandle
+      ? new TelegramAlertSender({
+          api: botHandle.bot.api,
+          client: dbClient,
+          resolveChatId: (userId) => resolveTelegramChatId(dbClient, userId),
+          formatMessage: formatTelegramAlertMessage,
+          rateLimiter: new TokenBucketRateLimiter(),
+          log: loggerInfoSink({ component: "alerts" }),
+          onError: loggerErrorSink({ component: "alerts" }),
+        })
+      : new InMemoryAlertSender();
+
+    const dispatcherHook = makeDispatcherHook({
+      client: dbClient,
+      sender: alertSender,
+      log: loggerInfoSink({ component: "alerts" }),
+      onError: loggerErrorSink({ component: "alerts" }),
+    });
+    startPoller({ client: dbClient, onSnapshotInserted: dispatcherHook });
+
     const weeklyCalibrationTelegram: WeeklyCalibrationTelegramSender = telegram;
 
     startCron({
