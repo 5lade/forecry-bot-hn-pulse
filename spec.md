@@ -221,3 +221,9 @@ These are the measurable thresholds `bin/test-completion.sh` checks daily:
 3. **Scorer health**: Model has produced a probability for every snapshot in the last hour (no NULL `p_front_page_6h` values).
 4. **Alert delivery**: Synthetic test watch fires an alert that lands in the test Telegram chat within 120 seconds of the matching snapshot — round-trip latency measured.
 5. **Calibration drift**: Brier score on the last 7 days of predictions is ≤ 0.20 (above 0.25 means the model has decayed and needs retraining).
+
+## Implementation alignment notes (2026-05-18)
+
+- The alert dispatcher delivers threshold/acceleration/submission alerts through Telegram using persisted `users.telegram_user_id` mappings. Tests use fake senders only; production uses `TelegramAlertSender`.
+- The poller tracks Hacker News top/front-page ranks by fetching `/topstories`, writing top-30 `item_snapshots.rank`, and marking `items.reached_front_page` / `reached_front_page_at` for outcome calibration.
+- Canonical bot repository artifacts are `spec.md`, `brand.json`, and `PRODUCT.md`. Legacy `Spec.md` has been normalized to lowercase `spec.md`.

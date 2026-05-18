@@ -21,7 +21,7 @@ docker run -d --name hn-pulse -e API_KEY=... forecry-bot-hn-pulse
 
 ## Spec
 
-See [Spec.md](./Spec.md).
+See [spec.md](./spec.md).
 
 ## Acceptance tests
 

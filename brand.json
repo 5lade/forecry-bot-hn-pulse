@@ -1,0 +1,22 @@
+{
+  "name": "HN Pulse",
+  "slug": "hn-pulse",
+  "tagline": "Real-time Hacker News front-page probability alerts.",
+  "category": "developer-tools intelligence",
+  "audience": [
+    "indie hackers launching on Hacker News",
+    "founders monitoring launch momentum",
+    "growth marketers watching competitor domains"
+  ],
+  "positioning": "Telegram-first launch intelligence for HN submissions: score early momentum, alert on threshold crossings, and summarize calibration daily.",
+  "channels": {
+    "primary": "Telegram",
+    "secondary": ["webhook", "daily digest"]
+  },
+  "pricing": {
+    "free": "2 watches, alerts above 80%, no digest",
+    "pulse": "$19/mo: 25 watches, configurable thresholds, daily digest, acceleration alerts",
+    "pulse-pro": "$49/mo: unlimited watches, webhook delivery, weekly calibration report, API key"
+  },
+  "tone": ["clear", "urgent", "evidence-led", "operator-friendly"]
+}
